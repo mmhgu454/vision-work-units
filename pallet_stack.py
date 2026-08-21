@@ -483,9 +483,15 @@ def load_score_model(model_path):
     """
     載入 SVR 評分模型。原始碼在每次呼叫 get_prior_pallet_score 時都 joblib.load 一次，
     等於每幀讀一次磁碟；這裡拆出來讓呼叫端載一次重複用。
-    找不到檔案回傳 None（評分會退回預設 1.0）。
+    joblib 沒安裝、或找不到檔案，都回傳 None（評分會退回預設 1.0）。
+    這是刻意的：本單元的核心功能只需要 numpy，評分是選配，
+    不該因為少裝一個套件就讓整個堆疊判定跑不起來。
     """
-    import joblib
+    try:
+        import joblib
+    except ImportError:
+        logger.warning("沒有安裝 joblib，無法載入評分模型，評分將回傳預設值 1.0")
+        return None
     try:
         return joblib.load(model_path)
     except FileNotFoundError:

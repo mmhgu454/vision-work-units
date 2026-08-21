@@ -198,6 +198,33 @@ def test_沒有評分模型時回傳預設分數():
                                      model_path="/nonexistent.joblib") == 1.0
 
 
+def test_沒安裝joblib時評分優雅退回而不是崩潰(monkeypatch):
+    """
+    joblib 是選配相依（requirements.txt 裡沒有它）。少裝它只該讓評分退回 1.0，
+    不該讓整個堆疊判定跑不起來——核心功能只需要 numpy。
+    """
+    import builtins
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name.split(".")[0] == "joblib":
+            raise ModuleNotFoundError("模擬：沒有安裝 joblib", name="joblib")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+
+    assert ps.load_score_model("whatever.joblib") is None
+    assert ps.get_prior_pallet_score([], [], CARDBOARD, STATION,
+                                     model_path="whatever.joblib") == 1.0
+
+    # 堆疊判定本身完全不受影響
+    cal = ps.make_calibrator()
+    color, pc = make_scene(calibrate=cal)
+    r = ps.analyze_pallet(color, pc, no_detections, STATION, CARDBOARD, calibrate=cal)
+    assert r.place_position is not None
+    assert r.prior_score == 1.0
+
+
 # ----------------------------------------------------------------- 契約檢查
 
 @pytest.mark.parametrize("bad,match", [
@@ -240,7 +267,8 @@ def test_單元不碰檔案系統(tmp_path, monkeypatch):
 
 
 def test_真實SVR模型能算出限幅內的分數():
-    """整合測試：模型檔不在就跳過。"""
+    """整合測試：沒裝 joblib 或模型檔不在就跳過。"""
+    pytest.importorskip("joblib")
     model_path = Path(__file__).resolve().parents[1] / "model" / "pallet_svr_model.joblib"
     if not model_path.exists():
         pytest.skip("找不到 SVR 模型檔")
@@ -254,6 +282,7 @@ def test_真實SVR模型能算出限幅內的分數():
 
 def test_評分模型只載入一次就能重複用():
     """原始碼每次呼叫都 joblib.load 一次，等於每幀讀磁碟。"""
+    pytest.importorskip("joblib")
     model_path = Path(__file__).resolve().parents[1] / "model" / "pallet_svr_model.joblib"
     if not model_path.exists():
         pytest.skip("找不到 SVR 模型檔")
