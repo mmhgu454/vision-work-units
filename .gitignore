@@ -1,0 +1,15 @@
+# 模型權重：另外取得，不進版控
+model
+model/
+
+# 錄下來的實拍資料與匯出圖（不容易重製，請另外備份）
+fixtures/*.npz
+fixtures/png/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+.vscode/
+.idea/
+.DS_Store
