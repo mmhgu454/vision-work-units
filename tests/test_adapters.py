@@ -71,6 +71,7 @@ def test_視角旋轉不影響量測結果():
 
 def test_點雲座標系旋轉是取幀元件的參數而非寫死():
     """座標修正由取幀端負責且可調，量測單元不認識它。"""
+    pytest.importorskip("pyrealsense2")
     import realsense_source as rsrc
 
     assert rsrc.DEFAULT_PC_ROTATION_DEG == (0.0, 0.0, 180.0)   # task3 現場值
@@ -84,6 +85,7 @@ def test_點雲座標系旋轉是取幀元件的參數而非寫死():
 
 def test_三個task的取幀方法都能覆寫座標修正():
     """換相機架法時不用改檔案，傳參數即可。"""
+    pytest.importorskip("pyrealsense2")
     import inspect
     import realsense_source as rsrc
 

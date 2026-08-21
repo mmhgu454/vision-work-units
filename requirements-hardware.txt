@@ -1,0 +1,7 @@
+# 接真實相機與模型時才需要（run_live.py、realsense_source.py、rfdetr_detector.py）。
+# 注意 rfdetr 會拉進 torch，約 1.7 GB。
+-r requirements.txt
+pyrealsense2>=2.54
+rfdetr>=1.6
+joblib>=1.3               # pallet_stack.py 的 SVR 優先度評分
+scikit-learn>=1.3         # 同上

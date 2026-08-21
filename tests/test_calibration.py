@@ -13,6 +13,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# 這一檔測的是取幀端的座標校正，沒裝 pyrealsense2 就整檔跳過。
+# 三個量測單元的測試不受影響——它們不碰硬體。
+pytest.importorskip("pyrealsense2", reason="需要 pyrealsense2 才能測取幀端")
+
 import realsense_source as rs_src
 from realsense_source import CameraPose, calibrate_flat, get_rotation_matrix, task2_pose_for
 

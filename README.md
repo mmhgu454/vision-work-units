@@ -18,26 +18,36 @@
 
 ---
 
+## 安裝
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+
+pip install -r requirements.txt            # 用單元、跑測試（numpy + cv2 + pytest）
+pip install -r requirements-hardware.txt   # 再加上相機與模型（會拉進 torch，約 1.7 GB）
+```
+
+只想用某一個量測單元的話，連 venv 都不用開——那是一個只依賴 numpy 的 `.py` 檔，
+複製走即可，見〈把單元搬到別的專案〉。
+
+模型權重（`model/*.pth`、`*.joblib`）不在版控裡，放進 `model/` 才能跑 `run_live.py` 的偵測與評分。
+
 ## 30 秒上手
 
 ```bash
-PY=~/code/fgo/.fgovenv/bin/python
-
-# 跑測試（不需要相機、不需要模型，1.4 秒）
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $PY -m pytest tests -q
+# 跑測試（不需要相機、不需要模型，1.5 秒）
+pytest tests -q
 
 # 接上相機，開即時預覽
-$PY run_live.py --task 3 --preview --rot-k 0 --label L554001   # 紙箱尺寸
-$PY run_live.py --task 2 --preview --position 1,1              # 擺放檢查
-$PY run_live.py --task 1 --preview --station g4_1              # 堆疊判定
+python run_live.py --task 3 --preview --rot-k 0 --label L554001   # 紙箱尺寸
+python run_live.py --task 2 --preview --position 1,1              # 擺放檢查
+python run_live.py --task 1 --preview --station g4_1              # 堆疊判定
 
 # 拿存好的資料離線重跑，不需要相機
-$PY run_live.py --replay fixtures/ --rot-k 0
+python run_live.py --replay fixtures/ --rot-k 0
 ```
 
-> ⚠ `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` 不能省。這個 venv 的 python 是系統 python3 的
-> symlink，`/opt/ros/humble` 的 `launch_pytest` 外掛會被自動載入，而它本身壞的（缺 `lark`），
-> 會讓 pytest 在收集測試前就崩潰。
+沒裝 `pyrealsense2` 也能跑測試——碰到取幀端的那幾個會自動跳過，三個量測單元的測試不受影響。
 
 ---
 
@@ -329,5 +339,16 @@ pip install numpy opencv-python pyrealsense2 rfdetr joblib scikit-learn pytest
 注意畫面只有**一個**箱子時，k 設錯也可能剛好過關（候選只有一個，配對邏輯的 fallback 會救回來），
 多箱子時才會現形。偵測器與單元的 `view_rot_k` 不一致會直接拋 `ContractError`。
 
-**Q: 測試怎麼跑都崩潰？**
-少加 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`。見本文最上方。
+**Q: `pytest` 還沒開始跑就崩潰？**
+你的環境裡有壞掉的 pytest 外掛被自動載入了。常見於裝了 ROS 的機器——
+`/opt/ros/humble` 的 `launch_pytest` 缺 `lark`，會讓 pytest 在收集測試前就死掉。
+用獨立的 venv 通常就沒事；如果 python 是系統 python 的 symlink 而繞不開，加上環境變數停用外掛自動載入：
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests -q
+```
+
+**Q: 我沒有 RealSense 相機，測試跑得起來嗎？**
+可以。`pip install -r requirements.txt` 之後 `pytest tests -q`，
+需要 `pyrealsense2` 的那幾個會自動跳過（85 passed, 3 skipped），
+三個量測單元的測試全部照跑。

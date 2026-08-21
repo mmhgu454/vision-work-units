@@ -1,0 +1,4 @@
+# 使用量測單元、跑測試所需。不含相機與模型。
+numpy>=1.24
+opencv-python>=4.8        # 只有 fit_check.py 與 viz.py 需要
+pytest>=7.0               # 跑測試才需要
