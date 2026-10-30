@@ -44,8 +44,7 @@ except ImportError as e:   # 沒裝 pyzbar，或裝了但找不到系統的 libz
         "  uv pip install pyzbar          # Python 套件\n"
         "  sudo apt install libzbar0      # 系統函式庫") from e
 
-#: 預覽畫面顯示綠色的距離（公尺）。這是 D435 1080p 讀 15 字元 Code128 的實測值：
-#: 更遠像素不夠，更近失焦。換相機或解析度要重新實測，用 run_live.py --good-range 覆蓋。
+#: 實測讀得最穩的距離（公尺）。D435 1080p、15 字元 Code128：更遠像素不夠，更近失焦。
 GOOD_RANGE_M = (0.20, 0.25)
 
 
@@ -150,10 +149,10 @@ def center_distance(pc: np.ndarray, half: int = 20) -> Optional[float]:
     return float(np.median(z)) if z.size else None
 
 
-def draw_distance(view: np.ndarray, dist_m: Optional[float], good_range=GOOD_RANGE_M) -> None:
-    """在畫面中央畫十字準心與距離。在 good_range 內綠色，否則紅色並提示方向。"""
+def draw_distance(view: np.ndarray, dist_m: Optional[float]) -> None:
+    """在畫面中央畫十字準心與距離。在 GOOD_RANGE_M 內綠色，否則紅色並提示方向。"""
     h, w = view.shape[:2]
-    lo, hi = good_range
+    lo, hi = GOOD_RANGE_M
     if dist_m is None:
         color, text = (0, 0, 255), "no depth"
     elif dist_m < lo:
@@ -196,7 +195,7 @@ def save_frame(img: np.ndarray, save_dir: Path, tag: str) -> Path:
     return path
 
 
-def preview(grab, save_dir: Optional[Path] = None, good_range=GOOD_RANGE_M,
+def preview(grab, save_dir: Optional[Path] = None,
             win: str = "task4 barcode — SPACE:辨識  s:存圖  ESC:離開") -> int:
     """
     即時預覽。grab() 每次回傳 (BGR 影像, 中心距離公尺 或 None)；
@@ -204,8 +203,7 @@ def preview(grab, save_dir: Optional[Path] = None, good_range=GOOD_RANGE_M,
     直到下一次 SPACE。有給 save_dir 時，SPACE 會順便存原始畫面（_ok / _fail），
     s 只存不辨識。
     """
-    lo, hi = good_range
-    h, w = None, None
+    lo, hi = GOOD_RANGE_M
     print(f"\ntask4 即時預覽（條碼對準畫面中央十字，距離 {lo * 100:.0f}~{hi * 100:.0f} cm 時綠色）")
     print("  SPACE：辨識" + ("並存圖   s：只存圖" if save_dir else "") + "   ESC / q：離開\n")
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
@@ -213,12 +211,9 @@ def preview(grab, save_dir: Optional[Path] = None, good_range=GOOD_RANGE_M,
     try:
         while True:
             img, dist_m = grab()
-            if w is None:
-                h, w = img.shape[:2]
-                print(f"  彩色解析度 {w}x{h}\n")
             view = draw(img, codes)
             if dist_m is not None or getattr(grab, "has_depth", False):
-                draw_distance(view, dist_m, good_range)
+                draw_distance(view, dist_m)
             cv2.putText(view, status, (10, view.shape[0] - 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
             cv2.imshow(win, view)

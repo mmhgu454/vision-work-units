@@ -772,16 +772,14 @@ def run_task4(args) -> int:
     import barcode_read as br
     from realsense_source import RealSenseSource
 
-    # 預設 1280x720：D435、D455 都支援。條碼只吃橫向解析度，1280x800 不會比較好讀；
-    # D435 要更清楚就 --color-size 1920x1080。
-    with RealSenseSource(color_size=args.color_size or (1280, 720)) as cam:
+    with RealSenseSource(color_size=args.color_size or (1920, 1080)) as cam:
         def grab():
             color_img, pc_np = cam.get_frame()
             return color_img, br.center_distance(pc_np)
         grab.has_depth = True          # 沒有有效深度時也要畫準心提示 "no depth"
 
         if args.preview:
-            return br.preview(grab, FIXTURE_DIR / "barcode", good_range=args.good_range)
+            return br.preview(grab, FIXTURE_DIR / "barcode")
         rc = 0
         for i in range(args.n):
             img, dist_m = grab()
@@ -897,11 +895,7 @@ def main() -> int:
     ap.add_argument("--color-size", dest="color_size", default=None,
                     type=lambda s: tuple(int(v) for v in s.lower().split("x")),
                     help="彩色解析度 WxH，例如 1920x1080（只有 D435 有）。"
-                         "預設跟深度一樣 1280x720")
-    ap.add_argument("--good-range", dest="good_range", default="0.20,0.25",
-                    type=lambda s: tuple(float(v) for v in s.split(",")),
-                    help="task4 預覽距離顯示綠色的範圍，公尺，格式 近,遠（預設 0.20,0.25，"
-                         "是 D435 1080p 的實測值；換相機要重新實測）")
+                         "預設跟深度一樣 1280x720；task4 預設 1920x1080")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
