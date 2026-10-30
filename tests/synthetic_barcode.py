@@ -35,8 +35,7 @@ def make_ean13_image(first12: str = "471234567890", module_px: int = 4,
     """
     回傳 (H, W, 3) uint8 BGR 白底黑條的 EAN-13 圖，條碼置中。
 
-    預設加一點模糊與雜訊，模擬相機拍到的樣子。OpenCV 的偵測器靠梯度紋理找條碼，
-    完美的純黑白圖反而框不到。
+    預設加一點模糊與雜訊，模擬相機拍到的樣子。
     """
     bits = ean13_bits(first12)
     row = np.array([0 if b == "1" else 255 for b in bits], dtype=np.uint8)

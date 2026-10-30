@@ -773,13 +773,19 @@ def run_task4(args) -> int:
     from realsense_source import RealSenseSource
 
     with RealSenseSource(color_size=args.color_size or (1920, 1080)) as cam:
-        grab = lambda: cam.get_frame()[0]
+        def grab():
+            color_img, pc_np = cam.get_frame()
+            return color_img, br.center_distance(pc_np)
+        grab.has_depth = True          # 沒有有效深度時也要畫準心提示 "no depth"
+
         if args.preview:
             return br.preview(grab, FIXTURE_DIR / "barcode")
         rc = 0
         for i in range(args.n):
-            codes = br.read_barcodes(grab())
-            print(f"\n[{i + 1}/{args.n}] 解碼器：{br.backend_name()}")
+            img, dist_m = grab()
+            codes = br.read_barcodes(img)
+            dist = f"{dist_m * 100:.1f} cm" if dist_m is not None else "無深度"
+            print(f"\n[{i + 1}/{args.n}] 中心距離 {dist}")
             br.describe(codes)
             if not codes:
                 rc = 1

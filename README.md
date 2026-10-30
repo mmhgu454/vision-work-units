@@ -11,7 +11,7 @@
 | `box_measure.py` | 從偵測框 + 點雲量出紙箱長寬高，比對箱型 | numpy |
 | `fit_check.py` | 判斷指定位置放不放得下箱子 | numpy + cv2 |
 | `pallet_stack.py` | 判斷棧板各位置堆了幾層、下一箱該放哪 | numpy |
-| `barcode_read.py` | 拍條碼、讀出數值（task4，sample） | numpy + cv2（+pyzbar 較耐用） |
+| `barcode_read.py` | 拍條碼、讀出數值（task4，sample） | numpy + cv2 + pyzbar |
 
 > 來源：從一個貨物堆疊的視覺專案拆出來。原始碼的行號引用（`src/…`、`vision_engine.py:…`）
 > 指的是那個專案，不在這個 repo 裡。
@@ -61,7 +61,7 @@ python run_live.py --replay fixtures/ --rot-k 0
 | `box_measure.py` | task3 | **numpy** | 從偵測框 + 點雲量出紙箱長寬高，比對箱型 |
 | `fit_check.py` | task2 | **numpy + cv2** | 判斷指定位置放不放得下箱子 |
 | `pallet_stack.py` | task1 | **numpy**（+joblib 評分才要） | 判斷棧板各位置堆了幾層、下一箱該放哪 |
-| `barcode_read.py` | task4 | **numpy + cv2**（+pyzbar 選配） | 讀條碼內容（Code128 / EAN / QR…） |
+| `barcode_read.py` | task4 | **numpy + cv2 + pyzbar** | 讀條碼內容（Code128 / EAN / QR…） |
 
 這三個檔案**互不 import**，也不 import 專案內任何模組。各自有一個測試在乾淨子行程裡驗這件事：
 
@@ -136,17 +136,19 @@ $PY run_live.py --task 1 --preview --station g4_1 --cardboard L554001
 ### task4 — 讀條碼（sample）
 
 ```bash
-$PY run_live.py --task 4 --preview          # RealSense：畫面上即時框出條碼，SPACE 印出讀值
+$PY run_live.py --task 4 --preview          # RealSense：SPACE 辨識並存圖，s 只存圖
 $PY run_live.py --task 4 -n 3               # 不開視窗，連讀 3 次
 $PY barcode_read.py photo.jpg --show        # 讀照片，不需要相機
 $PY barcode_read.py --webcam 0              # 用 USB webcam
 ```
 
-解碼器優先用 **pyzbar**（Code128 / Code39 / EAN / UPC / QR 都認得），沒裝就退回
-OpenCV 內建的（只認 EAN / UPC）。終端機會印出這次用的是哪個。
-讀不到時會自動再試「放大 2 倍 + 二值化」的版本。
+解碼器只用 **pyzbar**（Code128 / Code39 / EAN / UPC / QR 都認得），沒裝會直接報錯。
+不用 OpenCV 內建的解碼器：實拍時它會把 Code128 誤讀成隨機的 UPC 數字。
 
-拍不到的常見原因：條碼太小（一條細線不到 2 像素）、反光、失焦。先把相機靠近一點試試。
+**把條碼對準畫面中央的十字，等距離變綠色（20~25 cm）再按 SPACE。**
+這是 D435 實測出來的範圍：更遠條碼太小、像素不夠；更近會失焦（D435 彩色是定焦鏡頭）。
+按 SPACE 的同時會把原始畫面存到 `fixtures/barcode/`（檔名結尾 `_ok` / `_fail`），
+讀不到的 case 可以拿來離線分析：`$PY barcode_read.py fixtures/barcode/*_fail.png`。
 
 ---
 

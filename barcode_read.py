@@ -4,10 +4,9 @@ barcode_read.py — task4：拍 barcode、讀出數值（sample）
 輸入一張 BGR 影像，回傳畫面裡所有讀得到的條碼。取幀是外面的事，
 所以 RealSense、USB webcam、存好的照片都能餵進來。
 
-解碼器（二選一）：
-    - pyzbar      — 支援 Code128 / Code39 / EAN / UPC / QR 等。需要系統的 libzbar0。
-    - cv2.barcode — OpenCV 內建，只認 EAN / UPC。**只在沒有 pyzbar 時才用**：
-                    實拍 Code128 時它會把密條碼硬解成隨機的 UPC_A 數字。
+解碼器只用 pyzbar（Code128 / Code39 / EAN / UPC / QR 等），沒裝就在 import 時報錯。
+不退回 OpenCV 的 cv2.barcode：實拍 Code128 時它會把密條碼硬解成隨機的 UPC_A 數字，
+讀錯比讀不到更糟。
 
 前處理（依序，讀到就停）：
     1. 原圖直接解
@@ -23,7 +22,7 @@ barcode_read.py — task4：拍 barcode、讀出數值（sample）
 python barcode_read.py photo.jpg               # 讀圖檔，印出結果
 python barcode_read.py photo.jpg --show        # 另外開視窗看框在哪
 python barcode_read.py --webcam 0              # USB webcam 即時預覽：SPACE 讀、ESC 離開
-（RealSense 走 run_live.py --task 4）
+（RealSense 走 run_live.py --task 4，畫面中央會顯示距離）
 """
 
 from __future__ import annotations
@@ -39,53 +38,31 @@ import numpy as np
 
 try:
     from pyzbar import pyzbar
-except Exception:          # 沒裝 pyzbar 或找不到 libzbar0
-    pyzbar = None
+except ImportError as e:   # 沒裝 pyzbar，或裝了但找不到系統的 libzbar0
+    raise ImportError(
+        f"barcode_read 需要 pyzbar：{e}\n"
+        "  uv pip install pyzbar          # Python 套件\n"
+        "  sudo apt install libzbar0      # 系統函式庫") from e
+
+#: 實測讀得最穩的距離（公尺）。D435 1080p、15 字元 Code128：更遠像素不夠，更近失焦。
+GOOD_RANGE_M = (0.20, 0.25)
 
 
 class Barcode(NamedTuple):
     text: str              # 條碼內容
     kind: str              # 種類，例如 CODE128 / EAN13 / QRCODE
     corners: np.ndarray    # (N, 2) int32，原圖座標，畫框用
-    backend: str           # 哪個解碼器讀到的：pyzbar / opencv
-
-
-def backend_name() -> str:
-    return "pyzbar" if pyzbar is not None else "opencv"
 
 
 # --------------------------------------------------------------------- 解碼器
 
-def _decode_pyzbar(img: np.ndarray, scale: float) -> List[Barcode]:
+def _decode(img: np.ndarray, scale: float = 1.0) -> List[Barcode]:
     out = []
     for r in pyzbar.decode(img):
         pts = np.array([(p.x, p.y) for p in r.polygon], dtype=np.float32) / scale
         out.append(Barcode(r.data.decode("utf-8", errors="replace"), r.type,
-                           pts.astype(np.int32), "pyzbar"))
+                           pts.astype(np.int32)))
     return out
-
-
-_cv_detector = None
-
-
-def _decode_opencv(img: np.ndarray, scale: float) -> List[Barcode]:
-    global _cv_detector
-    if _cv_detector is None:
-        _cv_detector = cv2.barcode_BarcodeDetector()
-    ok, texts, kinds, points = _cv_detector.detectAndDecodeWithType(img)
-    if not ok or points is None:
-        return []
-    out = []
-    for text, kind, pts in zip(texts, kinds, points):
-        if text:                                   # 有偵測到框但沒解出來的會是空字串
-            out.append(Barcode(text, str(kind), (pts / scale).astype(np.int32), "opencv"))
-    return out
-
-
-def _decode(img: np.ndarray, scale: float = 1.0) -> List[Barcode]:
-    if pyzbar is not None:
-        return _decode_pyzbar(img, scale)
-    return _decode_opencv(img, scale)
 
 
 def _otsu(gray: np.ndarray) -> np.ndarray:
@@ -142,7 +119,7 @@ def _decode_candidate(gray: np.ndarray, rect) -> List[Barcode]:
 def read_barcodes(color_img: np.ndarray) -> List[Barcode]:
     """讀出影像裡所有條碼。讀不到回傳空 list。同一內容只留一筆。"""
     gray = cv2.cvtColor(color_img, cv2.COLOR_BGR2GRAY) if color_img.ndim == 3 else color_img
-    codes = _decode(color_img)
+    codes = _decode(gray)
     if not codes:
         big = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
         codes = _decode(_otsu(big), scale=2.0)
@@ -157,6 +134,35 @@ def read_barcodes(color_img: np.ndarray) -> List[Barcode]:
             seen.add((c.text, c.kind))
             uniq.append(c)
     return uniq
+
+
+# --------------------------------------------------------------------- 距離
+
+def center_distance(pc: np.ndarray, half: int = 20) -> Optional[float]:
+    """
+    畫面中心 (2*half)x(2*half) 區塊的深度中位數，單位公尺；沒有有效深度回傳 None。
+    pc 是與彩色圖對齊的 (H, W, 3) 點雲，第 3 軸是深度。
+    """
+    h, w = pc.shape[:2]
+    z = pc[h // 2 - half:h // 2 + half, w // 2 - half:w // 2 + half, 2]
+    z = z[z > 0.01]
+    return float(np.median(z)) if z.size else None
+
+
+def draw_distance(view: np.ndarray, dist_m: Optional[float]) -> None:
+    """在畫面中央畫十字準心與距離。在 GOOD_RANGE_M 內綠色，否則紅色並提示方向。"""
+    h, w = view.shape[:2]
+    lo, hi = GOOD_RANGE_M
+    if dist_m is None:
+        color, text = (0, 0, 255), "no depth"
+    elif dist_m < lo:
+        color, text = (0, 0, 255), f"{dist_m * 100:.1f} cm  too close"
+    elif dist_m > hi:
+        color, text = (0, 0, 255), f"{dist_m * 100:.1f} cm  too far"
+    else:
+        color, text = (0, 255, 0), f"{dist_m * 100:.1f} cm  OK"
+    cv2.drawMarker(view, (w // 2, h // 2), color, cv2.MARKER_CROSS, 40, 2)
+    cv2.putText(view, text, (w // 2 + 30, h // 2 - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
 
 
 # --------------------------------------------------------------------- 畫圖 / 輸出
@@ -176,7 +182,7 @@ def describe(codes: List[Barcode]) -> None:
     if not codes:
         print("  ❌ 沒讀到條碼")
     for i, c in enumerate(codes, 1):
-        print(f"  [{i}] {c.kind:<8} {c.text}    ({c.backend})")
+        print(f"  [{i}] {c.kind:<8} {c.text}")
     print("-" * 64)
 
 
@@ -192,19 +198,22 @@ def save_frame(img: np.ndarray, save_dir: Path, tag: str) -> Path:
 def preview(grab, save_dir: Optional[Path] = None,
             win: str = "task4 barcode — SPACE:辨識  s:存圖  ESC:離開") -> int:
     """
-    即時預覽。grab() 每次回傳一張 BGR 影像。
-    平常只顯示畫面；按 SPACE 才解碼當下那幀，結果印到終端機並疊在畫面上，
+    即時預覽。grab() 每次回傳 (BGR 影像, 中心距離公尺 或 None)；
+    距離是 None 時（例如 webcam）不畫準心。平常只顯示畫面；按 SPACE 才解碼當下那幀，結果印到終端機並疊在畫面上，
     直到下一次 SPACE。有給 save_dir 時，SPACE 會順便存原始畫面（_ok / _fail），
     s 只存不辨識。
     """
-    print(f"\ntask4 即時預覽（解碼器：{backend_name()}）")
+    lo, hi = GOOD_RANGE_M
+    print(f"\ntask4 即時預覽（條碼對準畫面中央十字，距離 {lo * 100:.0f}~{hi * 100:.0f} cm 時綠色）")
     print("  SPACE：辨識" + ("並存圖   s：只存圖" if save_dir else "") + "   ESC / q：離開\n")
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     codes, status = [], "SPACE: read barcode"
     try:
         while True:
-            img = grab()
+            img, dist_m = grab()
             view = draw(img, codes)
+            if dist_m is not None or getattr(grab, "has_depth", False):
+                draw_distance(view, dist_m)
             cv2.putText(view, status, (10, view.shape[0] - 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
             cv2.imshow(win, view)
@@ -240,7 +249,7 @@ def main(argv: Optional[list] = None) -> int:
             ok, frame = cap.read()
             if not ok:
                 raise RuntimeError("webcam 取不到影像")
-            return frame
+            return frame, None
         try:
             return preview(grab, Path("fixtures/barcode"))
         finally:
