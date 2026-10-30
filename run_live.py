@@ -765,8 +765,32 @@ def run_preview(args, cam, detect) -> int:
     return 0
 
 
+# --------------------------------------------------------------------- task4
+
+def run_task4(args) -> int:
+    """task4：讀條碼。只用彩色影像，不需要模型。"""
+    import barcode_read as br
+    from realsense_source import RealSenseSource
+
+    with RealSenseSource() as cam:
+        grab = lambda: cam.get_frame()[0]
+        if args.preview:
+            return br.preview(grab)
+        rc = 0
+        for i in range(args.n):
+            codes = br.read_barcodes(grab())
+            print(f"\n[{i + 1}/{args.n}] 解碼器：{br.backend_name()}")
+            br.describe(codes)
+            if not codes:
+                rc = 1
+        return rc
+
+
 def run_live(args) -> int:
     from realsense_source import RealSenseSource
+
+    if args.task == 4:
+        return run_task4(args)
 
     detect = None
     if args.task == 2:
@@ -840,8 +864,9 @@ def main() -> int:
                          "（用來補完 --no-model 拍的 fixture，或測試不同 --conf）")
     ap.add_argument("--rewrite", action="store_true",
                     help="搭配 --redetect：把新的偵測結果寫回原 fixture")
-    ap.add_argument("--task", type=int, choices=(1, 2, 3), default=3,
-                    help="要跑哪個 task：3=紙箱尺寸量測（預設），2=擺放位置檢查，1=棧板堆疊判定")
+    ap.add_argument("--task", type=int, choices=(1, 2, 3, 4), default=3,
+                    help="要跑哪個 task：3=紙箱尺寸量測（預設），2=擺放位置檢查，1=棧板堆疊判定，"
+                         "4=讀條碼")
     ap.add_argument("--station", default="g4_1",
                     help="task1 的工作站：g4_1 / g4_2 / g8_1 / p_1")
     ap.add_argument("--score-model", dest="score_model", default="",
