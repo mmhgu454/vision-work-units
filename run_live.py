@@ -45,8 +45,25 @@ FIXTURE_DIR = HERE / "fixtures"
 
 # --------------------------------------------------------------------- 輸出
 
-def describe(result: bm.BoxMeasurement, elapsed: float = None, true_label: str = "") -> None:
+def measure_frames(cam, detect, args):
+    """
+    連抓 args.frames 幀、各量一次，再用 combine_measurements 取中位數。
+    回傳 (最後一幀 color_img, 最後一幀 pc_np, 合併結果, 各幀結果)。
+    """
+    per_frame = []
+    for _ in range(max(1, args.frames)):
+        color_img, pc_np = cam.get_frame()
+        per_frame.append(bm.measure_box(color_img, pc_np, detect, view_rot_k=args.rot_k))
+    return color_img, pc_np, bm.combine_measurements(per_frame), per_frame
+
+
+def describe(result: bm.BoxMeasurement, elapsed: float = None, true_label: str = "",
+             per_frame=None) -> None:
     print("-" * 64)
+    if per_frame and len(per_frame) > 1:
+        for i, r in enumerate(per_frame, 1):
+            lwh = "  ".join(f"{v:.3f}" for v in r.lwh) if r.lwh else "—"
+            print(f"  第 {i} 幀    : {lwh}   {r.box_type}")
     print(f"  階段      : {result.stage}")
     print(f"  箱型      : {result.box_type}" + ("  ✅" if result.ok else "  ❌"))
     if result.lwh:
@@ -719,11 +736,11 @@ def run_preview(args, cam, detect) -> int:
             else:
                 t0 = time.time()
                 try:
-                    result = bm.measure_box(color_img, pc_np, detect, view_rot_k=args.rot_k)
+                    color_img, pc_np, result, per_frame = measure_frames(cam, detect, args)
                 except bm.ContractError as e:
                     print(f"❌ 契約檢查失敗: {e}")
                     continue
-                describe(result, time.time() - t0, args.label)
+                describe(result, time.time() - t0, args.label, per_frame)
 
             shot = viz.draw_detections(color_img, result, true_label=args.label)
             shot = np.rot90(shot, k=args.rot_k).copy()
@@ -761,7 +778,7 @@ def run_live(args) -> int:
     else:
         print("⚠ --no-model：只測取幀，不做偵測與量測。")
 
-    with RealSenseSource() as cam:
+    with RealSenseSource(depth_filters=args.depth_filter) as cam:
         if args.task == 1:
             return run_preview_task1(args, cam) if args.preview else run_task1(args, cam)
         if args.task == 2:
@@ -772,21 +789,21 @@ def run_live(args) -> int:
         rc = 0
         for i in range(args.n):
             t0 = time.time()
-            color_img, pc_np = cam.get_frame()
-            valid = float((pc_np[..., 2] > 0.01).mean())
-            print(f"\n[{i + 1}/{args.n}] color={color_img.shape} pc={pc_np.shape} "
-                  f"有效深度 {valid:.1%}")
-
             if detect is None:
+                color_img, pc_np = cam.get_frame()
                 result = bm.BoxMeasurement(box_type="", stage="--no-model")
             else:
                 try:
-                    result = bm.measure_box(color_img, pc_np, detect, view_rot_k=args.rot_k)
+                    color_img, pc_np, result, per_frame = measure_frames(cam, detect, args)
                 except bm.ContractError as e:
                     print(f"  ❌ 契約檢查失敗: {e}")
                     rc = 2
                     continue
-                describe(result, time.time() - t0, args.label)
+            valid = float((pc_np[..., 2] > 0.01).mean())
+            print(f"\n[{i + 1}/{args.n}] color={color_img.shape} pc={pc_np.shape} "
+                  f"有效深度 {valid:.1%}")
+            if detect is not None:
+                describe(result, time.time() - t0, args.label, per_frame)
                 if not result.ok:
                     rc = 1
 
@@ -810,6 +827,11 @@ def main() -> int:
     ap.add_argument("--label", default="", help="人工標註的正確箱型，例如 L554001")
     ap.add_argument("--rot-k", dest="rot_k", type=int, default=2,
                     help="view_rot_k，把輸入影像轉正立所需的 rot90 次數（預設 2）")
+    ap.add_argument("--frames", type=int, default=5,
+                    help="task3 每次量測連抓幾幀取中位數（預設 5；1 = 單幀）。"
+                         "存的 fixture 只含最後一幀，離線重跑是單幀結果")
+    ap.add_argument("--depth-filter", dest="depth_filter", action="store_true",
+                    help="開啟 RealSense 的 spatial + temporal 深度濾波（實驗中，預設關）")
     ap.add_argument("--conf", type=float, default=0.5, help="偵測信心門檻（預設 0.5）")
     ap.add_argument("--no-model", action="store_true", help="不載模型，只測取幀")
     ap.add_argument("--replay", metavar="PATH", help="用 .npz 或整個資料夾重跑，不需硬體")

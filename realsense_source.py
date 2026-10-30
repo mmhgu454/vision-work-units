@@ -22,9 +22,9 @@ import pyrealsense2 as rs
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WIDTH = 1280      # 對齊 src/config.py 的 CAM_HW_CFG
-DEFAULT_HEIGHT = 800
-DEFAULT_FPS = 15
+DEFAULT_WIDTH = 1280      # D455：深度最高 1280x720，彩色與深度共用這組尺寸
+DEFAULT_HEIGHT = 720      # （來源專案的舊相機是 1280x800 @ 15fps）
+DEFAULT_FPS = 30
 WARMUP_FRAMES = 30        # 對齊 camera_manager._camera_worker 的暖機幀數
 
 
@@ -47,12 +47,18 @@ class RealSenseSource:
     """開一條 RealSense 串流，吐出 (color_img, pc_np)。可當 context manager 用。"""
 
     def __init__(self, width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, fps=DEFAULT_FPS,
-                 warmup_frames=WARMUP_FRAMES, pc_rotation_deg=DEFAULT_PC_ROTATION_DEG):
+                 warmup_frames=WARMUP_FRAMES, pc_rotation_deg=DEFAULT_PC_ROTATION_DEG,
+                 depth_filters=False):
         """
         pc_rotation_deg : 套用在點雲上的歐拉角 (rx, ry, rz)，單位度。
                           預設 (0, 0, 180) 沿用現場設定。相機架法不同就改這個，
                           box_measure 一行都不用動。
+        depth_filters   : 套用 RealSense 的 spatial + temporal 濾波（在 disparity 域做，
+                          Intel 對 D4xx 的建議順序）。三個 task 的點雲都會受影響。
         """
+        self.filters = ([rs.disparity_transform(True), rs.spatial_filter(),
+                         rs.temporal_filter(), rs.disparity_transform(False)]
+                        if depth_filters else [])
         self.width, self.height, self.fps = width, height, fps
         self.warmup_frames = warmup_frames
         self.pc_rotation_deg = tuple(pc_rotation_deg)
@@ -73,24 +79,30 @@ class RealSenseSource:
         logger.info("RealSense 已啟動，暖機 %d 幀...", self.warmup_frames)
         for _ in range(self.warmup_frames):
             try:
-                self.pipeline.wait_for_frames()
+                self._grab()       # 有開濾波時順便餵 temporal filter 歷史幀
             except Exception:
                 pass
         logger.info("暖機完成。")
         return self
 
-    def get_frame(self, timeout_ms: int = 5000) -> Tuple[np.ndarray, np.ndarray]:
-        """回傳 (color_img BGR (H,W,3) uint8, pc_np (H,W,3) float32)。"""
-        if not self._started:
-            raise RuntimeError("尚未 start()")
-
+    def _grab(self, timeout_ms: int = 5000):
+        """取一組對齊好的 (color_frame, depth_frame)，有開濾波就套在 depth 上。"""
         frames = self.pipeline.wait_for_frames(timeout_ms=timeout_ms)
         aligned = self.align.process(frames)
         color_frame = aligned.get_color_frame()
         depth_frame = aligned.get_depth_frame()
         if not color_frame or not depth_frame:
             raise RuntimeError("取不到對齊後的 color/depth frame")
+        for f in self.filters:
+            depth_frame = f.process(depth_frame)
+        return color_frame, depth_frame.as_depth_frame()
 
+    def get_frame(self, timeout_ms: int = 5000) -> Tuple[np.ndarray, np.ndarray]:
+        """回傳 (color_img BGR (H,W,3) uint8, pc_np (H,W,3) float32)。"""
+        if not self._started:
+            raise RuntimeError("尚未 start()")
+
+        color_frame, depth_frame = self._grab(timeout_ms)
         color_img = np.asanyarray(color_frame.get_data()).copy()
         pc_np = self.to_pointcloud(depth_frame)
         return color_img, pc_np
@@ -115,12 +127,7 @@ class RealSenseSource:
         """
         if not self._started:
             raise RuntimeError("尚未 start()")
-        frames = self.pipeline.wait_for_frames(timeout_ms=timeout_ms)
-        aligned = self.align.process(frames)
-        color_frame = aligned.get_color_frame()
-        depth_frame = aligned.get_depth_frame()
-        if not color_frame or not depth_frame:
-            raise RuntimeError("取不到對齊後的 color/depth frame")
+        color_frame, depth_frame = self._grab(timeout_ms)
         color_img = np.asanyarray(color_frame.get_data()).copy()
 
         default_rot, default_pose = task2_pose_for(position_2d)
@@ -143,12 +150,7 @@ class RealSenseSource:
         """
         if not self._started:
             raise RuntimeError("尚未 start()")
-        frames = self.pipeline.wait_for_frames(timeout_ms=timeout_ms)
-        aligned = self.align.process(frames)
-        color_frame = aligned.get_color_frame()
-        depth_frame = aligned.get_depth_frame()
-        if not color_frame or not depth_frame:
-            raise RuntimeError("取不到對齊後的 color/depth frame")
+        color_frame, depth_frame = self._grab(timeout_ms)
         color_img = np.asanyarray(color_frame.get_data()).copy()
 
         pts = self.pc.calculate(depth_frame)

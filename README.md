@@ -39,7 +39,7 @@ pip install -r requirements-hardware.txt   # 再加上相機與模型（會拉�
 pytest tests -q
 
 # 接上相機，開即時預覽
-python run_live.py --task 3 --preview --rot-k 0 --label L554001   # 紙箱尺寸
+python run_live.py --task 3 --preview --rot-k 0 --label L554001   # 紙箱尺寸（每次連抓 5 幀取中位數）
 python run_live.py --task 2 --preview --position 1,1              # 擺放檢查
 python run_live.py --task 1 --preview --station g4_1              # 堆疊判定
 
@@ -88,9 +88,20 @@ $PY run_live.py --task 3 --preview --rot-k 0 --label L554001
 
 預覽視窗：`SPACE` 拍攝並量測 → `s` 存檔 / 其他鍵丟棄 → `d` 切換深度圖 → `ESC` 離開。
 
+每按一次 `SPACE` 會**連抓 5 幀、各量一次，長寬高各取中位數**再判定箱型，終端機會列出每一幀的數字。
+`--frames 1` 退回單幀。存下來的 fixture 只含最後一幀，所以 `--replay` 重跑的是單幀結果，
+跟當下的判定可能不同。
+
+⚠ **箱子離相機約 1.5 m 以內。** D455 在 1.5 m 實測 5 幀中位數 20/20 正確；
+2 m 以上頂面在畫面裡太小太斜、遠端深度有一半無效，長寬會亂跳，單幀正確率掉到約 40%。
+判斷標準：頂面框高度至少約 120 px（1280×720 畫面）。
+
 ⚠ **face 框不能碰到畫面邊緣。** 一碰到，箱子下緣被裁掉，高度會量成偏小值但數字看起來仍合理。
 `measure_box` 會把這件事放進 `result.warnings`，標註圖會畫黃框。用 `result.trustworthy`
 判斷「成功且無警告」。
+
+實驗選項 `--depth-filter`：開 RealSense 的 spatial + temporal 深度濾波。實測讓 H 穩很多，
+但對長寬幾乎沒幫助；它會影響三個 task 的點雲，task1/task2 還沒驗證過，所以預設關。
 
 ### task2 — 擺放位置檢查
 
@@ -199,7 +210,7 @@ mkdir newproject/vision && cd newproject/vision
 cp .../box_measure.py .
 cp .../tests/test_box_measure.py .
 cp .../tests/synthetic.py .
-pytest -q            # 23 passed
+pytest -q            # 30 passed
 ```
 
 **不需要帶走的**：`tests/test_adapters.py`（那是這個專案的取幀/偵測/畫圖的整合測試）、
@@ -228,12 +239,25 @@ result.warnings    # 可疑之處（例如框被畫面裁切）
 result.trustworthy # 成功且無警告
 ```
 
+**實拍請連抓多幀再合併。** `measure_box` 只看一幀，單幀的長寬會被深度雜訊帶著晃 ±3–4 cm，
+剛好卡在比對門檻邊緣（D455 約 1.5 m：單幀正確率 76–86%）。抓幀是呼叫端的事，合併交給單元：
+
+```python
+from box_measure import measure_box, combine_measurements
+
+results = [measure_box(c, pc, detect, view_rot_k=0) for c, pc in frames]   # 例如連抓 5 幀
+result = combine_measurements(results)   # 長寬高各取中位數再比對 → 實測 20/20
+```
+
+`run_live.py` 的 `measure_frames()` 就是這樣接的，可以照抄。
+
 三個單元的共同約定：
 
 - **不碰相機、不碰檔案系統、不寫檔。** 中間結果全部隨回傳值帶出，要存圖是呼叫端的事。
 - **設定內建但可覆寫**：箱型尺寸表、ROI 範圍、工作站區域全部有預設值，也全部是參數。
+  task3 的尺寸表一律寫 `(長, 寬, 高)` 且長 ≥ 寬（量到的長寬也會排成這個順序再比對）。
 - **契約違反就明確報錯**（`ContractError`），不會靜默給你錯的數字。例如點雲格式錯、
-  影像與點雲解析度不符、相機 roll 超出容許值、箱型的 ROI 還沒量。
+  影像與點雲解析度不符、相機 roll 超出容許值、箱型的 ROI 還沒量、尺寸表長 < 寬。
 
 各檔案開頭的 docstring 寫了完整的座標系契約，搬過去之前先讀那一段。
 
@@ -287,7 +311,8 @@ pip install numpy opencv-python pyrealsense2 rfdetr joblib scikit-learn pytest
 | `_box_center` / `_dist2` / `_rot90_box` / `_clipped_edges` | **獨立** |
 | `calculate_box_lwh` — 量長寬高 | `fit_plane_ransac_svd`, `get_orthonormal_basis` |
 | `select_top_and_face` — 挑配對的 top/face | `_box_center`, `_dist2` |
-| `measure_box` — 完整流程 | 上面全部（10 個） |
+| `measure_box` — 完整流程（單幀） | 上面全部（10 個） |
+| `combine_measurements` — 多幀取中位數 | `find_closest_box_type` |
 
 ### `fit_check.py`（task2）
 
@@ -316,7 +341,7 @@ pip install numpy opencv-python pyrealsense2 rfdetr joblib scikit-learn pytest
 | `build_block_list` / `build_tape_block` — 堆疊判定 | 4 個底層函數 |
 | `analyze_pallet` — 完整流程 | 上面全部（7 個） |
 
-> 30 個函數裡有 17 個是完全獨立的。挑演算法片段時優先看那些。
+> 31 個函數裡有 17 個是完全獨立的。挑演算法片段時優先看那些。
 
 **複製時記得一起看的東西**：每個檔案開頭的 docstring 寫了完整的座標系契約，
 還有模組層級的常數（尺寸表、ROI 範圍、姿態預設值）。那些常數全部都是函數的預設參數，
@@ -330,6 +355,15 @@ pip install numpy opencv-python pyrealsense2 rfdetr joblib scikit-learn pytest
 合成資料實測顯示演算法有系統性低估（L/W 約 86%、H 約 97%，來自 5% 內縮與 2–98 百分位裁剪）。
 但**真實資料上沒有出現**——真實點雲會延伸到偵測框之外。如果真的偏小，先看 `result.warnings`
 有沒有「框貼到畫面邊緣」。`L/W` 比例守恆，可以用來分辨「整體縮水」還是「真的量錯」。
+
+**Q: 箱子和相機都沒動，長寬卻每次都不一樣、時對時錯？**
+看終端機列出的每一幀數字：
+
+- **高度很穩、長寬亂跳** → 深度雜訊。先確認箱子在 1.5 m 內、頂面框夠大（見 task3 一節），
+  再確認有在用多幀中位數（`--frames` 預設 5）。單幀本來就會晃 ±3–4 cm。
+- **長寬差很多、但兩個數字都介於真實長與寬之間**（例如 0.57×0.50 的箱子量成 0.48×0.54）
+  → 頂面太小太斜，PCA 找不到正確的邊方向。拉近距離，換演算法救不回來。
+- 同一個 fixture 重跑兩次結果不同 → 不該發生（RANSAC 已固定亂數種子），請回報。
 
 **Q: task2 一直說「基準區域點太少」？**
 黃色基準框沒落在要量高度的平面上。用 `--task 2 --preview` 對準，點數不足 50 時畫面會加紅框。
@@ -350,5 +384,5 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests -q
 
 **Q: 我沒有 RealSense 相機，測試跑得起來嗎？**
 可以。`pip install -r requirements.txt` 之後 `pytest tests -q`，
-需要 `pyrealsense2` 的那幾個會自動跳過（85 passed, 3 skipped），
+需要 `pyrealsense2` 的那幾個會自動跳過（102 passed, 3 skipped），
 三個量測單元的測試全部照跑。

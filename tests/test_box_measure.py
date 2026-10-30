@@ -76,6 +76,18 @@ def test_箱型比對_誤差超過門檻時回傳Err():
     assert loss >= bm.DEFAULT_MATCH_LOSS_THRESHOLD
 
 
+def test_平面擬合同一份點雲每次結果相同():
+    """迴歸守門：RANSAC 沒固定種子時，D455 實拍的同一幀重算會在對與錯之間跳。"""
+    rng = np.random.default_rng(123)
+    _, pc, _, _ = make_box_scene()
+    pts = pc[45:95, 105:215].reshape(-1, 3)
+    pts = pts[pts[:, 2] > 0.01]
+    pts = pts + rng.normal(0, 0.01, pts.shape)
+    n1, d1, in1 = bm.fit_plane_ransac_svd(pts)
+    n2, d2, in2 = bm.fit_plane_ransac_svd(pts)
+    assert np.array_equal(n1, n2) and d1 == d2 and np.array_equal(in1, in2)
+
+
 def test_框旋轉來回還原():
     box = [100.0, 200.0, 300.0, 450.0]
     H, W = 800, 1280
@@ -125,7 +137,61 @@ def test_比對成功時回傳箱型與中間結果():
     assert "完成" in r.stage
 
 
+def test_長邊朝相機水平方向時LW不會對調():
+    """迴歸守門：接近正方形的頂面在實拍時 PCA 主軸會越過 45°，L/W 對調就比對不到。"""
+    color, pc, tb, fb = make_box_scene(0.60, 0.35, 0.23)
+    probe = bm.measure_box(color, pc, fake_detect(tb, fb), view_rot_k=0)
+    dims = {"TESTBOX": probe.lwh}
+    color, pc, tb, fb = make_box_scene(L=0.35, W=0.60, H=0.23)   # 同一個箱子轉 90 度
+    r = bm.measure_box(color, pc, fake_detect(tb, fb), dimensions=dims, view_rot_k=0)
+    assert r.lwh[0] >= r.lwh[1]
+    assert r.box_type == "TESTBOX", r.stage
+
+
+def test_同一幀量兩次結果相同():
+    rng = np.random.default_rng(7)
+    color, pc, tb, fb = make_box_scene(0.57, 0.50, 0.50)
+    pc = pc + rng.normal(0, 0.01, pc.shape).astype(np.float32) * (pc[..., 2:3] > 0.01)
+    r1 = bm.measure_box(color, pc, fake_detect(tb, fb), view_rot_k=0)
+    r2 = bm.measure_box(color, pc, fake_detect(tb, fb), view_rot_k=0)
+    assert r1.lwh == r2.lwh and r1.box_type == r2.box_type
+
+
+def _m(lwh, warnings=()):
+    return bm.BoxMeasurement(box_type="Err" if lwh is None else "?", stage="x",
+                             lwh=lwh, warnings=list(warnings))
+
+
+def test_多幀取中位數救回單幀雜訊():
+    """D455 實測數字：單幀 L 在 0.52–0.63 晃，5 幀裡有 2 幀單獨比對會是 Err。"""
+    frames = [_m((0.620, 0.536, 0.516)), _m((0.542, 0.503, 0.512)), _m((0.588, 0.520, 0.510)),
+              _m((0.625, 0.561, 0.512)), _m((0.530, 0.480, 0.509))]
+    r = bm.combine_measurements(frames)
+    assert r.lwh == pytest.approx((0.588, 0.520, 0.512))
+    assert r.box_type == "L554001", r.stage
+    assert "5/5" in r.stage
+
+
+def test_多幀合併_部分幀量不到時給警告():
+    r = bm.combine_measurements([_m(None), _m((0.57, 0.50, 0.50), ["框貼邊"]), _m((0.57, 0.50, 0.50))])
+    assert r.box_type == "L554001"
+    assert "框貼邊" in r.warnings
+    assert any("3 幀中只有 2 幀" in w for w in r.warnings)
+
+
+def test_多幀合併_全部量不到時回傳Err():
+    r = bm.combine_measurements([_m(None), _m(None)])
+    assert r.box_type == "Err" and r.lwh is None and "0/2" in r.stage
+
+
 # ----------------------------------------------------------------- 契約檢查
+
+def test_尺寸表長小於寬時報錯():
+    color, pc, tb, fb = make_box_scene()
+    with pytest.raises(ContractError, match="長 ≥ 寬"):
+        bm.measure_box(color, pc, fake_detect(tb, fb),
+                       dimensions={"BAD": (0.35, 0.60, 0.23)}, view_rot_k=0)
+
 
 def test_相機有roll時明確報錯而不是靜默給錯答案():
     color, pc, tb, fb = make_box_scene(roll_deg=40.0)
