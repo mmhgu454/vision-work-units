@@ -48,8 +48,11 @@ class RealSenseSource:
 
     def __init__(self, width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, fps=DEFAULT_FPS,
                  warmup_frames=WARMUP_FRAMES, pc_rotation_deg=DEFAULT_PC_ROTATION_DEG,
-                 depth_filters=False):
+                 depth_filters=False, color_size=None):
         """
+        width, height   : 深度串流解析度。color_size 沒給時彩色也用這組。
+        color_size      : (w, h) 彩色串流解析度，例如 D435 的 (1920, 1080)。
+                          注意 align 會把深度對齊到彩色，點雲也會變成這個尺寸。
         pc_rotation_deg : 套用在點雲上的歐拉角 (rx, ry, rz)，單位度。
                           預設 (0, 0, 180) 沿用現場設定。相機架法不同就改這個，
                           box_measure 一行都不用動。
@@ -60,6 +63,7 @@ class RealSenseSource:
                          rs.temporal_filter(), rs.disparity_transform(False)]
                         if depth_filters else [])
         self.width, self.height, self.fps = width, height, fps
+        self.color_w, self.color_h = color_size or (width, height)
         self.warmup_frames = warmup_frames
         self.pc_rotation_deg = tuple(pc_rotation_deg)
         self.R_fix = get_rotation_matrix(*self.pc_rotation_deg)
@@ -72,9 +76,15 @@ class RealSenseSource:
     def start(self):
         if self._started:
             return self
-        self.rs_config.enable_stream(rs.stream.color, self.width, self.height, rs.format.bgr8, self.fps)
+        self.rs_config.enable_stream(rs.stream.color, self.color_w, self.color_h, rs.format.bgr8, self.fps)
         self.rs_config.enable_stream(rs.stream.depth, self.width, self.height, rs.format.z16, self.fps)
-        self.pipeline.start(self.rs_config)
+        try:
+            self.pipeline.start(self.rs_config)
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"{e}：相機不支援 彩色 {self.color_w}x{self.color_h} + 深度 "
+                f"{self.width}x{self.height} @ {self.fps}fps，或相機正被別的程式占用。"
+                "D435/D455 深度最高 1280x720；1920x1080 彩色只有 D435 有。") from e
         self._started = True
         logger.info("RealSense 已啟動，暖機 %d 幀...", self.warmup_frames)
         for _ in range(self.warmup_frames):

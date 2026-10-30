@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
+from pathlib import Path
 from typing import List, NamedTuple, Optional
 
 import cv2
@@ -117,14 +119,25 @@ def describe(codes: List[Barcode]) -> None:
     print("-" * 64)
 
 
-def preview(grab, win: str = "task4 barcode — SPACE:讀取  ESC:離開") -> int:
+def save_frame(img: np.ndarray, save_dir: Path, tag: str) -> Path:
+    """存原始畫面（未畫框），之後可以用 barcode_read.py <檔案> 離線重讀。"""
+    save_dir.mkdir(parents=True, exist_ok=True)
+    path = save_dir / f"{datetime.now():%Y%m%d-%H%M%S}_{tag}.png"
+    cv2.imwrite(str(path), img)
+    print(f"  💾 已存 {path}")
+    return path
+
+
+def preview(grab, save_dir: Optional[Path] = None,
+            win: str = "task4 barcode — SPACE:辨識  s:存圖  ESC:離開") -> int:
     """
     即時預覽。grab() 每次回傳一張 BGR 影像。
     平常只顯示畫面；按 SPACE 才解碼當下那幀，結果印到終端機並疊在畫面上，
-    直到下一次 SPACE。
+    直到下一次 SPACE。有給 save_dir 時，SPACE 會順便存原始畫面（_ok / _fail），
+    s 只存不辨識。
     """
     print(f"\ntask4 即時預覽（解碼器：{backend_name()}）")
-    print("  SPACE：辨識   ESC / q：離開\n")
+    print("  SPACE：辨識" + ("並存圖   s：只存圖" if save_dir else "") + "   ESC / q：離開\n")
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     codes, status = [], "SPACE: read barcode"
     try:
@@ -141,6 +154,10 @@ def preview(grab, win: str = "task4 barcode — SPACE:讀取  ESC:離開") -> in
                 codes = read_barcodes(img)
                 describe(codes)
                 status = " | ".join(c.text for c in codes) if codes else "NOT FOUND"
+                if save_dir:
+                    save_frame(img, save_dir, "ok" if codes else "fail")
+            if key == ord("s") and save_dir:
+                save_frame(img, save_dir, "raw")
     finally:
         cv2.destroyAllWindows()
 
@@ -164,7 +181,7 @@ def main(argv: Optional[list] = None) -> int:
                 raise RuntimeError("webcam 取不到影像")
             return frame
         try:
-            return preview(grab)
+            return preview(grab, Path("fixtures/barcode"))
         finally:
             cap.release()
 

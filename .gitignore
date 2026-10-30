@@ -5,6 +5,7 @@ model/
 # 錄下來的實拍資料與匯出圖（不容易重製，請另外備份）
 fixtures/*.npz
 fixtures/png/
+fixtures/barcode/
 
 __pycache__/
 *.py[cod]
