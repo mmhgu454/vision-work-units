@@ -11,6 +11,7 @@
 | `box_measure.py` | 從偵測框 + 點雲量出紙箱長寬高，比對箱型 | numpy |
 | `fit_check.py` | 判斷指定位置放不放得下箱子 | numpy + cv2 |
 | `pallet_stack.py` | 判斷棧板各位置堆了幾層、下一箱該放哪 | numpy |
+| `barcode_read.py` | 拍條碼、讀出數值（task4，sample） | numpy + cv2（+pyzbar 較耐用） |
 
 > 來源：從一個貨物堆疊的視覺專案拆出來。原始碼的行號引用（`src/…`、`vision_engine.py:…`）
 > 指的是那個專案，不在這個 repo 裡。
@@ -60,6 +61,7 @@ python run_live.py --replay fixtures/ --rot-k 0
 | `box_measure.py` | task3 | **numpy** | 從偵測框 + 點雲量出紙箱長寬高，比對箱型 |
 | `fit_check.py` | task2 | **numpy + cv2** | 判斷指定位置放不放得下箱子 |
 | `pallet_stack.py` | task1 | **numpy**（+joblib 評分才要） | 判斷棧板各位置堆了幾層、下一箱該放哪 |
+| `barcode_read.py` | task4 | **numpy + cv2**（+pyzbar 選配） | 讀條碼內容（Code128 / EAN / QR…） |
 
 這三個檔案**互不 import**，也不 import 專案內任何模組。各自有一個測試在乾淨子行程裡驗這件事：
 
@@ -119,6 +121,21 @@ $PY run_live.py --task 1 --preview --station g4_1 --cardboard L554001
 想完全不碰模型就加 `--no-model`。
 
 要用 SVR 優先度評分：`--score-model model/pallet_svr_model.joblib`。
+
+### task4 — 讀條碼（sample）
+
+```bash
+$PY run_live.py --task 4 --preview          # RealSense：畫面上即時框出條碼，SPACE 印出讀值
+$PY run_live.py --task 4 -n 3               # 不開視窗，連讀 3 次
+$PY barcode_read.py photo.jpg --show        # 讀照片，不需要相機
+$PY barcode_read.py --webcam 0              # 用 USB webcam
+```
+
+解碼器優先用 **pyzbar**（Code128 / Code39 / EAN / UPC / QR 都認得），沒裝就退回
+OpenCV 內建的（只認 EAN / UPC）。終端機會印出這次用的是哪個。
+讀不到時會自動再試「放大 2 倍 + 二值化」的版本。
+
+拍不到的常見原因：條碼太小（一條細線不到 2 像素）、反光、失焦。先把相機靠近一點試試。
 
 ---
 
@@ -187,6 +204,7 @@ x/z 範圍，姿態一改就全部偏掉。它們是 `check_fit()` 的參數，�
 | task3 紙箱尺寸量測 | `box_measure.py` | `tests/test_box_measure.py` | `tests/synthetic.py` |
 | task2 擺放位置檢查 | `fit_check.py` | `tests/test_fit_check.py` | `tests/synthetic_fit.py` |
 | task1 棧板堆疊判定 | `pallet_stack.py` | `tests/test_pallet_stack.py` | `tests/synthetic_stack.py` |
+| task4 讀條碼 | `barcode_read.py` | `tests/test_barcode_read.py` | `tests/synthetic_barcode.py` |
 
 **測試要一起帶。** 那不只是「檢查有沒有壞」——它把座標系契約、三個 bug 的迴歸守門、
 以及演算法在合成場景下的量測特性都編碼在裡面。到了新專案 `pytest` 一跑就知道還對不對，

@@ -1,4 +1,5 @@
 # 使用量測單元、跑測試所需。不含相機與模型。
 numpy>=1.24
-opencv-python>=4.8        # 只有 fit_check.py 與 viz.py 需要
+opencv-python>=4.8        # 只有 fit_check.py、barcode_read.py 與 viz.py 需要
+pyzbar>=0.1.9             # 只有 barcode_read.py（task4）需要；另需系統的 libzbar0，沒有就退回 OpenCV
 pytest>=7.0               # 跑測試才需要

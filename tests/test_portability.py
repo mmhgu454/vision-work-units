@@ -22,10 +22,11 @@ MANIFEST = {
     "box_measure":  ("test_box_measure.py",  "synthetic.py"),
     "fit_check":    ("test_fit_check.py",    "synthetic_fit.py"),
     "pallet_stack": ("test_pallet_stack.py", "synthetic_stack.py"),
+    "barcode_read": ("test_barcode_read.py", "synthetic_barcode.py"),
 }
 
 #: 量測單元允許的第三方相依。除此之外只能用標準函式庫。
-UNIT_ALLOWED = {"numpy", "cv2", "joblib"}
+UNIT_ALLOWED = {"numpy", "cv2", "joblib", "pyzbar"}
 
 #: 測試檔額外允許的東西。
 TEST_EXTRA = {"pytest"}
