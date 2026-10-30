@@ -120,21 +120,27 @@ def describe(codes: List[Barcode]) -> None:
 def preview(grab, win: str = "task4 barcode — SPACE:讀取  ESC:離開") -> int:
     """
     即時預覽。grab() 每次回傳一張 BGR 影像。
-    畫面上會持續標出讀到的條碼；SPACE 把當下結果印到終端機。
+    平常只顯示畫面；按 SPACE 才解碼當下那幀，結果印到終端機並疊在畫面上，
+    直到下一次 SPACE。
     """
     print(f"\ntask4 即時預覽（解碼器：{backend_name()}）")
-    print("  SPACE：印出讀值   ESC / q：離開\n")
+    print("  SPACE：辨識   ESC / q：離開\n")
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    codes, status = [], "SPACE: read barcode"
     try:
         while True:
             img = grab()
-            codes = read_barcodes(img)
-            cv2.imshow(win, draw(img, codes))
+            view = draw(img, codes)
+            cv2.putText(view, status, (10, view.shape[0] - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.imshow(win, view)
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord("q")):
                 return 0
             if key == ord(" "):
+                codes = read_barcodes(img)
                 describe(codes)
+                status = " | ".join(c.text for c in codes) if codes else "NOT FOUND"
     finally:
         cv2.destroyAllWindows()
 
