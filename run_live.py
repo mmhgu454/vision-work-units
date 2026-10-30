@@ -772,7 +772,7 @@ def run_task4(args) -> int:
     import barcode_read as br
     from realsense_source import RealSenseSource
 
-    with RealSenseSource(color_size=args.color_size) as cam:
+    with RealSenseSource() as cam:
         def grab():
             color_img, pc_np = cam.get_frame()
             return color_img, br.center_distance(pc_np)
@@ -808,7 +808,7 @@ def run_live(args) -> int:
     else:
         print("⚠ --no-model：只測取幀，不做偵測與量測。")
 
-    with RealSenseSource(depth_filters=args.depth_filter, color_size=args.color_size) as cam:
+    with RealSenseSource(depth_filters=args.depth_filter) as cam:
         if args.task == 1:
             return run_preview_task1(args, cam) if args.preview else run_task1(args, cam)
         if args.task == 2:
@@ -892,10 +892,6 @@ def main() -> int:
                     help="關掉左右鏡像（預設 flip=True，與現場一致）")
     ap.add_argument("--sweep", action="store_true",
                     help="搭配 --replay：掃一輪 tilt/height 組合，印出各自量到的 base_h，用來校正相機姿態")
-    ap.add_argument("--color-size", dest="color_size", default=None,
-                    type=lambda s: tuple(int(v) for v in s.lower().split("x")),
-                    help="彩色解析度 WxH，例如 1920x1080（只有 D435 有）。"
-                         "預設跟深度一樣，見 realsense_source.py 的 DEFAULT_WIDTH/HEIGHT")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 

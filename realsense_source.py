@@ -22,8 +22,10 @@ import pyrealsense2 as rs
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WIDTH = 1280      # D455：深度最高 1280x720，彩色與深度共用這組尺寸
+DEFAULT_WIDTH = 1280      # 深度解析度。D435/D455 深度最高都是 1280x720
 DEFAULT_HEIGHT = 720      # （來源專案的舊相機是 1280x800 @ 15fps）
+DEFAULT_COLOR_WIDTH = 1280   # 彩色解析度。D435 可改 1920x1080（D455 沒有）；
+DEFAULT_COLOR_HEIGHT = 720   # 注意 align 會讓點雲跟著變成這個尺寸
 DEFAULT_FPS = 30
 WARMUP_FRAMES = 30        # 對齊 camera_manager._camera_worker 的暖機幀數
 
@@ -48,11 +50,11 @@ class RealSenseSource:
 
     def __init__(self, width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, fps=DEFAULT_FPS,
                  warmup_frames=WARMUP_FRAMES, pc_rotation_deg=DEFAULT_PC_ROTATION_DEG,
-                 depth_filters=False, color_size=None):
+                 depth_filters=False,
+                 color_size=(DEFAULT_COLOR_WIDTH, DEFAULT_COLOR_HEIGHT)):
         """
-        width, height   : 深度串流解析度。color_size 沒給時彩色也用這組。
-        color_size      : (w, h) 彩色串流解析度，例如 D435 的 (1920, 1080)。
-                          注意 align 會把深度對齊到彩色，點雲也會變成這個尺寸。
+        width, height   : 深度串流解析度。
+        color_size      : (w, h) 彩色串流解析度。
         pc_rotation_deg : 套用在點雲上的歐拉角 (rx, ry, rz)，單位度。
                           預設 (0, 0, 180) 沿用現場設定。相機架法不同就改這個，
                           box_measure 一行都不用動。
@@ -63,7 +65,7 @@ class RealSenseSource:
                          rs.temporal_filter(), rs.disparity_transform(False)]
                         if depth_filters else [])
         self.width, self.height, self.fps = width, height, fps
-        self.color_w, self.color_h = color_size or (width, height)
+        self.color_w, self.color_h = color_size
         self.warmup_frames = warmup_frames
         self.pc_rotation_deg = tuple(pc_rotation_deg)
         self.R_fix = get_rotation_matrix(*self.pc_rotation_deg)
