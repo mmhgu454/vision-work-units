@@ -45,6 +45,16 @@ def test_空白畫面回傳空list(backend):
     assert br.read_barcodes(np.full((480, 640, 3), 255, np.uint8)) == []
 
 
+def test_有pyzbar時不退回OpenCV(monkeypatch):
+    """實拍 Code128 時 OpenCV 會把密條碼硬解成隨機 UPC_A，所以有 pyzbar 就不能用它。"""
+    if br.pyzbar is None:
+        pytest.skip("沒裝 pyzbar / libzbar0")
+    def boom(*a, **k):
+        raise AssertionError("不該呼叫 OpenCV 解碼器")
+    monkeypatch.setattr(br, "_decode_opencv", boom)
+    assert br.read_barcodes(np.full((480, 640, 3), 255, np.uint8)) == []
+
+
 def test_draw不改原圖():
     img = make_ean13_image(DIGITS)
     before = img.copy()

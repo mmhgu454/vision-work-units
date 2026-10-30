@@ -4,11 +4,19 @@ barcode_read.py — task4：拍 barcode、讀出數值（sample）
 輸入一張 BGR 影像，回傳畫面裡所有讀得到的條碼。取幀是外面的事，
 所以 RealSense、USB webcam、存好的照片都能餵進來。
 
-解碼器（依序嘗試，先成功的為準）：
-    1. pyzbar      — 支援 Code128 / Code39 / EAN / UPC / QR 等，較耐用。需要系統的 libzbar0。
-    2. cv2.barcode — OpenCV 內建，只認 EAN / UPC 這類 1D 碼。pyzbar 不在時的退路。
+解碼器（二選一）：
+    - pyzbar      — 支援 Code128 / Code39 / EAN / UPC / QR 等。需要系統的 libzbar0。
+    - cv2.barcode — OpenCV 內建，只認 EAN / UPC。**只在沒有 pyzbar 時才用**：
+                    實拍 Code128 時它會把密條碼硬解成隨機的 UPC_A 數字。
 
-讀不到時會再試一次「放大 2 倍 + 灰階 + Otsu 二值化」的版本，條碼拍得小或光線不均時有用。
+前處理（依序，讀到就停）：
+    1. 原圖直接解
+    2. 整張放大 2 倍 + Otsu 二值化
+    3. 找條碼候選區（水平梯度強的長條）→ 依傾角轉正 → 放大 3 倍 → Otsu / 銳化 + Otsu
+
+實拍限制（D435 1080p，15 字元 Code128 實測）：
+    - 每條模組寬 < 2 px（條碼寬 < 400 px）讀不到——解析度不夠。
+    - 距離 20~25 cm 讀得最穩；更近會失焦（D435 彩色是定焦鏡頭），軟體救不回來。
 
 單獨使用
 --------
@@ -75,21 +83,74 @@ def _decode_opencv(img: np.ndarray, scale: float) -> List[Barcode]:
 
 
 def _decode(img: np.ndarray, scale: float = 1.0) -> List[Barcode]:
-    codes = _decode_pyzbar(img, scale) if pyzbar is not None else []
-    return codes or _decode_opencv(img, scale)
+    if pyzbar is not None:
+        return _decode_pyzbar(img, scale)
+    return _decode_opencv(img, scale)
 
 
-def _enhance(color_img: np.ndarray) -> np.ndarray:
-    """放大 2 倍 + 灰階 + Otsu 二值化。"""
-    gray = cv2.cvtColor(color_img, cv2.COLOR_BGR2GRAY) if color_img.ndim == 3 else color_img
-    big = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    _, bw = cv2.threshold(big, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return bw
+def _otsu(gray: np.ndarray) -> np.ndarray:
+    return cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+
+def _sharpen(gray: np.ndarray) -> np.ndarray:
+    blur = cv2.GaussianBlur(gray, (0, 0), 3)
+    return cv2.addWeighted(gray, 2.0, blur, -1.0, 0)
+
+
+def _candidates(gray: np.ndarray, top: int = 5) -> list:
+    """
+    找 1D 條碼候選區，回傳 cv2.minAreaRect 列表（大的在前）。
+    條碼的特徵是「垂直條紋」：水平梯度強、垂直梯度弱，閉運算把條紋連成一塊。
+    """
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=-1)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=-1)
+    grad = cv2.blur(cv2.convertScaleAbs(cv2.subtract(np.abs(gx), np.abs(gy))), (9, 9))
+    mask = _otsu(grad)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (31, 7)))
+    mask = cv2.dilate(cv2.erode(mask, None, iterations=3), None, iterations=3)
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return [cv2.minAreaRect(c) for c in sorted(cnts, key=cv2.contourArea, reverse=True)[:top]]
+
+
+def _deskew(gray: np.ndarray, rect, k: float):
+    """把候選區轉正、往外留邊、放大 k 倍。候選區不像條碼（太小或不夠扁長）回傳 None。"""
+    (cx, cy), (w, h), ang = rect
+    if w < h:
+        w, h, ang = h, w, ang - 90
+    if w < 60 or w < 2 * h:
+        return None
+    W, H = int(w * 1.3), int(h * 2.2)
+    M = cv2.getRotationMatrix2D((cx, cy), ang, k)
+    M[0, 2] += W * k / 2 - cx
+    M[1, 2] += H * k / 2 - cy
+    return cv2.warpAffine(gray, M, (int(W * k), int(H * k)), flags=cv2.INTER_CUBIC, borderValue=255)
+
+
+def _decode_candidate(gray: np.ndarray, rect) -> List[Barcode]:
+    """轉正後解碼。框直接用候選區的旋轉矩形（解碼器在二值化圖上常只回傳一條線）。"""
+    roi = _deskew(gray, rect, k=3)
+    if roi is None:
+        return []
+    for prep in (_otsu, lambda r: _otsu(_sharpen(r))):
+        codes = _decode(prep(roi))
+        if codes:
+            box = cv2.boxPoints(rect).astype(np.int32)
+            return [c._replace(corners=box) for c in codes]
+    return []
 
 
 def read_barcodes(color_img: np.ndarray) -> List[Barcode]:
     """讀出影像裡所有條碼。讀不到回傳空 list。同一內容只留一筆。"""
-    codes = _decode(color_img) or _decode(_enhance(color_img), scale=2.0)
+    gray = cv2.cvtColor(color_img, cv2.COLOR_BGR2GRAY) if color_img.ndim == 3 else color_img
+    codes = _decode(color_img)
+    if not codes:
+        big = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        codes = _decode(_otsu(big), scale=2.0)
+    if not codes:
+        for rect in _candidates(gray):
+            codes = _decode_candidate(gray, rect)
+            if codes:
+                break
     seen, uniq = set(), []
     for c in codes:
         if (c.text, c.kind) not in seen:
