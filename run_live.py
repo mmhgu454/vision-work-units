@@ -772,7 +772,7 @@ def run_task4(args) -> int:
     import barcode_read as br
     from realsense_source import RealSenseSource
 
-    with RealSenseSource(color_size=args.color_size or (1920, 1080)) as cam:
+    with RealSenseSource(color_size=args.color_size) as cam:
         def grab():
             color_img, pc_np = cam.get_frame()
             return color_img, br.center_distance(pc_np)
@@ -895,7 +895,7 @@ def main() -> int:
     ap.add_argument("--color-size", dest="color_size", default=None,
                     type=lambda s: tuple(int(v) for v in s.lower().split("x")),
                     help="彩色解析度 WxH，例如 1920x1080（只有 D435 有）。"
-                         "預設跟深度一樣 1280x720；task4 預設 1920x1080")
+                         "預設跟深度一樣，見 realsense_source.py 的 DEFAULT_WIDTH/HEIGHT")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
