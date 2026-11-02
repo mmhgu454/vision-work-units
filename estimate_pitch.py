@@ -129,7 +129,8 @@ def main() -> int:
 
     from realsense_source import RealSenseSource
 
-    win = "estimate_pitch — drag: ground ROI  SPACE: print  h: height  ESC: quit"
+    # 視窗名稱只用 ASCII：Qt 後端靠名稱找視窗，非 ASCII 會讓 setMouseCallback 找不到
+    win = "estimate_pitch - drag: ground ROI | SPACE: print | h: height | ESC: quit"
     picker = RoiPicker(args.roi)
     history = deque(maxlen=SMOOTH_FRAMES)
     show_height, last_roi = True, None
@@ -137,6 +138,8 @@ def main() -> int:
 
     print("用滑鼠在畫面上框一塊地面。SPACE 印出數值，h 切換高度，ESC 離開。")
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cv2.imshow(win, np.zeros((360, 640, 3), np.uint8))   # 先讓視窗真的建立起來再綁滑鼠
+    cv2.waitKey(1)
     cv2.setMouseCallback(win, picker)
     with RealSenseSource() as cam:
         frame_i = 0
