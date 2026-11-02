@@ -77,6 +77,8 @@ def test_沒有拉進硬體或專案相依():   # 出現 pyrealsense2 / config /
 | `rfdetr_detector.py` | 偵測：載模型、影像轉正、框轉回來 |
 | `viz.py` | 畫圖：偵測框標註、高度圖、深度有效性圖 |
 | `run_live.py` | 手動測試驅動：即時預覽、錄 fixture、離線重跑、匯出 PNG |
+| `estimate_pitch.py` | 現場工具：框一塊地面，即時顯示相機 pitch 與離地高度（給 task1 的 `--tilt` / `--phy-height`） |
+| `task1_place_view.py` | 現場工具：即時看 task1 的擺放判斷——四格、取樣角落、看不到的區域、下一箱位置 |
 
 ---
 
