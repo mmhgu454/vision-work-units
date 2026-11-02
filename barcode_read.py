@@ -11,11 +11,14 @@ barcode_read.py — task4：拍 barcode、讀出數值（sample）
 前處理（依序，讀到就停）：
     1. 原圖直接解
     2. 整張放大 2 倍 + Otsu 二值化
-    3. 找條碼候選區（水平梯度強的長條）→ 依傾角轉正 → 放大 3 倍 → Otsu / 銳化 + Otsu
+    3. 找條碼候選區（水平梯度強的長條，大小兩種範圍各取前 8 塊）→ 依傾角轉正 → 放大 3 倍
+       → Otsu / 銳化 + Otsu
 
 實拍限制（D435 1080p，15 字元 Code128 實測）：
-    - 每條模組寬 < 2 px（條碼寬 < 400 px）讀不到——解析度不夠。
-    - 距離 20~25 cm 讀得最穩；更近會失焦（D435 彩色是定焦鏡頭），軟體救不回來。
+    - 距離 20~25 cm 讀得最穩。更遠也讀過（每條模組約 1.5 px），但不穩；
+      更近會失焦（D435 彩色是定焦鏡頭），軟體救不回來。
+    - 平移到畫面邊緣沒關係；明顯斜看（透視）容易讀不到。
+    - 實拍 147 張零讀錯：讀到就可信，讀不到就重拍。
 
 單獨使用
 --------
@@ -74,19 +77,29 @@ def _sharpen(gray: np.ndarray) -> np.ndarray:
     return cv2.addWeighted(gray, 2.0, blur, -1.0, 0)
 
 
-def _candidates(gray: np.ndarray, top: int = 5) -> list:
+#: 閉運算的範圍（寬, 高），每種各找一次候選。
+#: 大的 31x7 把條紋連得完整，但條碼上下的文字、標籤邊緣也會黏進來，整張標籤變成一塊；
+#: 小的 15x3 不會黏到相鄰文字列。兩種都試、各取前 8 塊，實拍 147 張讀對 63 -> 88、讀錯仍為 0。
+CANDIDATE_KERNELS = ((31, 7), (15, 3))
+CANDIDATES_PER_KERNEL = 8
+
+
+def _candidates(gray: np.ndarray, top: int = CANDIDATES_PER_KERNEL) -> list:
     """
-    找 1D 條碼候選區，回傳 cv2.minAreaRect 列表（大的在前）。
+    找 1D 條碼候選區，回傳 cv2.minAreaRect 列表：每種閉運算範圍各取面積最大的 top 塊。
     條碼的特徵是「垂直條紋」：水平梯度強、垂直梯度弱，閉運算把條紋連成一塊。
     """
     gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=-1)
     gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=-1)
     grad = cv2.blur(cv2.convertScaleAbs(cv2.subtract(np.abs(gx), np.abs(gy))), (9, 9))
-    mask = _otsu(grad)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (31, 7)))
-    mask = cv2.dilate(cv2.erode(mask, None, iterations=3), None, iterations=3)
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    return [cv2.minAreaRect(c) for c in sorted(cnts, key=cv2.contourArea, reverse=True)[:top]]
+    stripes = _otsu(grad)
+    rects = []
+    for kernel in CANDIDATE_KERNELS:
+        mask = cv2.morphologyEx(stripes, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, kernel))
+        mask = cv2.dilate(cv2.erode(mask, None, iterations=3), None, iterations=3)
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        rects += [cv2.minAreaRect(c) for c in sorted(cnts, key=cv2.contourArea, reverse=True)[:top]]
+    return rects
 
 
 def _deskew(gray: np.ndarray, rect, k: float):
