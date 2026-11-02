@@ -17,25 +17,28 @@ def test_world_to_cam是校正的反運算(tilt, height, flip):
     assert np.allclose(back, cam, atol=1e-9)
 
 
-def test_取樣區與pallet_stack相同():
-    """pallet_stack 只看四個角落；畫出來的黃框必須是同一塊。"""
-    n = psm.HMAP_BASE_SIZE
-    hmap = np.zeros((n, n))
-    marks = {}
-    for k, (r0, r1, c0, c1) in tpv.sample_cells(n).items():
-        hmap[r0:r1, c0:c1] = 1 + 2 * k[0] + k[1]          # 每個角落不同高度
-        marks[k] = hmap[r0, c0]
-    meds = tpv.corner_medians(hmap, n)
-    assert meds == marks
+@pytest.mark.parametrize("station,block_type,n_cells", [("g8_1", "ground", 8), ("g4_1", "ground", 4),
+                                                         ("p_1", "pallet", 4)])
+def test_畫出的層數與演算法相同(station, block_type, n_cells):
+    """用每格不同高度的 hmap：畫圖用的中位數換算層數，要等於 pallet_stack 算出的 block。"""
+    lay = tpv.Layout(station, "L554001", block_type)
+    assert len(lay.regions) == n_cells
+    hmap = np.full((lay.n, lay.n), -np.inf)
+    for (r, c), (region, _) in lay.regions.items():
+        r0, r1, c0, c1 = region
+        hmap[r0:r1, c0:c1] = lay.base + ((r + 2 * c) % 4) * lay.box_h
+    to_layer = psm._make_height_to_layer(lay.box_h)
+    for (r, c), m in lay.medians(hmap).items():
+        assert to_layer(m, lay.base) == min(psm.MAX_LAYERS, (r + 2 * c) % 4)
 
 
 def test_工作區範圍對應世界座標():
-    geo = tpv.Geometry("g8_1", "L554001")
-    x0, x1, z0, z1 = geo.cells_to_world(0, geo.n, 0, geo.n)
+    lay = tpv.Layout("g8_1", "L554001", "ground")
+    x0, x1, z0, z1 = lay.cells_to_world(0, lay.n, 0, lay.n)
     info = psm.DEFAULT_BLOCK_CATALOG["g8_1"]
     assert (x0, x1) == pytest.approx((-info.width / 2, info.width / 2))
     assert (z0, z1) == pytest.approx((info.camera_distance, info.camera_distance + info.length))
-    # 列 0 是遠端
-    _, _, fz0, _ = geo.cells_to_world(*tpv.quad_cells(0, 0, geo.n))
-    _, _, nz0, _ = geo.cells_to_world(*tpv.quad_cells(1, 0, geo.n))
-    assert fz0 > nz0
+    # 第 1 排是遠端
+    far = lay.cells_to_world(*lay.regions[(0, 0)][0])
+    near = lay.cells_to_world(*lay.regions[(3, 0)][0])
+    assert far[2] > near[2]

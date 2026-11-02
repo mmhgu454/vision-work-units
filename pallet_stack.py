@@ -347,23 +347,73 @@ def build_block_list(pc_np, cardboard_type: str, station: str, calibrate: Callab
 
     hmap = _fill_hmap(flat, origin_x, pz, pw, pd, base_size)
 
-    # 多棧板怕誤判，留空隙 5cm
-    gap = CORNER_GAP_CELLS
-    corner = max(1, base_size // 4)
-    corner_regions = (
-        ((gap, corner), (gap, corner)),
-        ((gap, corner), (base_size - corner, base_size - gap)),
-        ((base_size - corner, base_size - gap), (gap, corner)),
-        ((base_size - corner, base_size - gap), (base_size - corner, base_size - gap)),
-    )
-
     block = np.zeros((2, 2), dtype=int)
-    for idx, ((r0, r1), (c0, c1)) in enumerate(corner_regions):
+    for (r, c), (_, (r0, r1, c0, c1)) in corner_regions(base_size).items():
         max_y = float(np.median(hmap[r0:r1, c0:c1]))
-        block[idx // 2, idx % 2] = height_to_layer(max_y, ph)
+        block[r, c] = height_to_layer(max_y, ph)
 
     place_position, _ = _pick_best(block)
     return (station, block), place_position, hmap
+
+
+def default_block_type(station: str) -> str:
+    """g 開頭是地面貼膠帶的暫存區（ground），其餘是棧板（pallet）。對齊 fgo API 範例。"""
+    return "ground" if station.startswith("g") else "pallet"
+
+
+def corner_regions(base_size: int = HMAP_BASE_SIZE) -> Dict[Tuple[int, int], tuple]:
+    """
+    pallet 模式的格子：2x2，每格只取角落一小塊（多棧板怕誤判，留空隙 5 cm）。
+    回傳 {(row, col): (格子範圍, 取樣範圍)}，範圍 = (列0, 列1, 欄0, 欄1)，hmap 列 0 是遠端。
+    build_block_list 與畫圖工具共用這份，畫的就是算的。
+    """
+    gap, corner, half = CORNER_GAP_CELLS, max(1, base_size // 4), base_size // 2
+    lo, hi = (gap, corner), (base_size - corner, base_size - gap)
+    out = {}
+    for r, rows in ((0, lo), (1, hi)):
+        for c, cols in ((0, lo), (1, hi)):
+            out[(r, c)] = ((r * half, (r + 1) * half, c * half, (c + 1) * half), (*rows, *cols))
+    return out
+
+
+def tape_regions(cardboard_type: str, station: str, *, dimensions=None, block_catalog=None,
+                 base_size: int = HMAP_BASE_SIZE) -> Dict[Tuple[int, int], tuple]:
+    """
+    ground 模式的格子：沿深度依箱子短邊切 row_count 排 x 2 欄，每格是一個箱子的領地。
+    回傳 {(row, col): (格子範圍, 取樣範圍 或 None)}，格式同 corner_regions。
+
+    ⚠ 取樣範圍照原始碼：寬、高各取格子的 1/4，但**右下角對在格子中心**
+      （r0 = center - sample_h），所以偏向遠端、左側，不是置中。保持與 fgo 一致。
+    """
+    dimensions = DEFAULT_BOX_DIMENSIONS if dimensions is None else dimensions
+    block_catalog = DEFAULT_BLOCK_CATALOG if block_catalog is None else block_catalog
+    # 原始碼是 `bh, bd = box.height, box.depth`。舊命名 width=長邊、depth=短邊，
+    # 改名後 width=短邊、length=長邊，所以舊的 depth 對應現在的 width（短邊）。
+    # bd 是「沿棧板深度方向的箱子邊」，用短邊。
+    _long, bd, _h = dimensions[cardboard_type]
+    pd = block_catalog[station].block_size[0]
+
+    row_count = max(1, int(np.floor(pd / (bd + TAPE_BOX_PADDING))))
+    col_count = 2
+    row_edges = np.linspace(0, base_size, row_count + 1, dtype=int)
+    col_edges = np.linspace(0, base_size, col_count + 1, dtype=int)
+
+    out = {}
+    for r in range(row_count):
+        for c in range(col_count):
+            region_r0, region_r1 = int(row_edges[r]), int(row_edges[r + 1])
+            region_c0, region_c1 = int(col_edges[c]), int(col_edges[c + 1])
+
+            # 寬、高各取 1/4，因此面積為小區域的 1/16
+            sample_h = max(1, (region_r1 - region_r0) // 4)
+            sample_w = max(1, (region_c1 - region_c0) // 4)
+            center_r = (region_r0 + region_r1) // 2
+            center_c = (region_c0 + region_c1) // 2
+            r0, c0 = center_r - sample_h, center_c - sample_w
+            r1, c1 = r0 + sample_h, c0 + sample_w
+            sample = (r0, r1, c0, c1) if r0 < r1 and c0 < c1 else None
+            out[(r, c)] = ((region_r0, region_r1, region_c0, region_c1), sample)
+    return out
 
 
 def build_tape_block(pc_np, cardboard_type: str, station: str, calibrate: Callable, *,
@@ -377,47 +427,25 @@ def build_tape_block(pc_np, cardboard_type: str, station: str, calibrate: Callab
 
     flat = _prepare_ground_points(pc_np, calibrate)
 
-    # 原始碼是 `bh, bd = box.height, box.depth`。舊命名 width=長邊、depth=短邊，
-    # 改名後 width=短邊、length=長邊，所以舊的 depth 對應現在的 width（短邊）。
-    # bd 是「沿棧板深度方向的箱子邊」，用短邊。
-    _long, _short, bh = dimensions[cardboard_type]
-    bd = _short
+    bh = dimensions[cardboard_type][2]
     height_to_layer = _make_height_to_layer(bh)
 
     pd, pw, ph = block_catalog[station].block_size
     px, pz = block_catalog[station].block_bias
     origin_x = px - pw / 2
 
-    row_count = max(1, int(np.floor(pd / (bd + TAPE_BOX_PADDING))))
-    col_count = 2
-
     hmap = _fill_hmap(flat, origin_x, pz, pw, pd, base_size)
 
-    row_edges = np.linspace(0, base_size, row_count + 1, dtype=int)
-    col_edges = np.linspace(0, base_size, col_count + 1, dtype=int)
-
-    block = np.zeros((row_count, col_count), dtype=int)
-    for r in range(row_count):
-        for c in range(col_count):
-            region_r0, region_r1 = row_edges[r], row_edges[r + 1]
-            region_c0, region_c1 = col_edges[c], col_edges[c + 1]
-
-            # 寬、高各取 1/4，因此面積為小區域的 1/16
-            sample_h = max(1, (region_r1 - region_r0) // 4)
-            sample_w = max(1, (region_c1 - region_c0) // 4)
-
-            center_r = (region_r0 + region_r1) // 2
-            center_c = (region_c0 + region_c1) // 2
-
-            r0 = center_r - sample_h
-            r1 = r0 + sample_h
-            c0 = center_c - sample_w
-            c1 = c0 + sample_w
-            if r0 >= r1 or c0 >= c1:
-                continue
-
-            max_y = float(np.median(hmap[r0:r1, c0:c1]))
-            block[r, c] = height_to_layer(max_y, ph)
+    regions = tape_regions(cardboard_type, station, dimensions=dimensions,
+                           block_catalog=block_catalog, base_size=base_size)
+    row_count = max(r for r, _ in regions) + 1
+    block = np.zeros((row_count, 2), dtype=int)
+    for (r, c), (_, sample) in regions.items():
+        if sample is None:
+            continue
+        r0, r1, c0, c1 = sample
+        max_y = float(np.median(hmap[r0:r1, c0:c1]))
+        block[r, c] = height_to_layer(max_y, ph)
 
     place_position, _ = _pick_best(block)
     return (station, block), place_position, hmap

@@ -895,8 +895,10 @@ def main() -> int:
     ap.add_argument("--position", default="1,1",
                     help="task2 的 position_2d，格式 row,col；col=1 為左站，其他為右站")
     ap.add_argument("--cardboard", default="L554001", help="task2 的箱型")
-    ap.add_argument("--block-type", dest="block_type", default="pallet",
-                    choices=("pallet", "ground"), help="task2：棧板上還是地面")
+    ap.add_argument("--block-type", dest="block_type", default=None,
+                    choices=("pallet", "ground"),
+                    help="棧板上還是地面。task1 不給就依工作站決定（g 開頭 ground、p 開頭 pallet）；"
+                         "task2 不給是 pallet")
     ap.add_argument("--retries", type=int, default=4,
                     help="task2 重試次數（每次重新取幀），對齊原本 vision_engine 的 4 次")
     ap.add_argument("--tilt", type=float, default=None,
@@ -909,6 +911,12 @@ def main() -> int:
                     help="搭配 --replay：掃一輪 tilt/height 組合，印出各自量到的 base_h，用來校正相機姿態")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    if args.block_type is None:
+        if args.task == 1:
+            import pallet_stack as psm
+            args.block_type = psm.default_block_type(args.station)
+        else:
+            args.block_type = "pallet"
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")

@@ -291,3 +291,31 @@ def test_評分模型只載入一次就能重複用():
     a = ps.get_prior_pallet_score(faces, [], CARDBOARD, STATION, model=model)
     b = ps.get_prior_pallet_score(faces, [], CARDBOARD, STATION, model=model)
     assert a == b
+
+
+# ----------------------------------------------------------------- 格子定義
+
+@pytest.mark.parametrize("station,n_cells", [("g8_1", 8), ("g4_1", 4), ("g4_2", 4)])
+def test_ground模式依箱子大小切格(station, n_cells):
+    """g8_1 有 8 個候選、g4 有 4 個；每格約一個箱子的領地。"""
+    regions = ps.tape_regions("L554001", station)
+    assert len(regions) == n_cells
+    assert {c for _, c in regions} == {0, 1}
+
+
+def test_ground模式取樣區照原始碼偏向遠端左側():
+    """取樣框右下角對在格子中心（原始碼行為），不是置中。"""
+    for (region, sample) in ps.tape_regions("L554001", "g8_1").values():
+        r0, r1, c0, c1 = region
+        assert sample[1] == (r0 + r1) // 2 and sample[3] == (c0 + c1) // 2
+
+
+def test_pallet模式是2x2角落():
+    regions = ps.corner_regions()
+    assert set(regions) == {(0, 0), (0, 1), (1, 0), (1, 1)}
+
+
+@pytest.mark.parametrize("station,expected", [("g4_1", "ground"), ("g4_2", "ground"),
+                                               ("g8_1", "ground"), ("p_1", "pallet")])
+def test_依工作站決定模式(station, expected):
+    assert ps.default_block_type(station) == expected
