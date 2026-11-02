@@ -1,19 +1,26 @@
 #!/usr/bin/env python
 """
-estimate_pitch.py — 用地面的深度估相機的 pitch 與離地高度
+estimate_pitch.py — 即時顯示相機的 pitch 與離地高度（用地面的深度）
 
-在彩色畫面上框一塊**確定是地面**的區域，對那塊的點雲擬合平面，算出：
+開一個預覽視窗，用滑鼠框一塊**確定是地面**的區域，畫面上就會即時顯示：
     pitch  光軸相對水平面的角度，負 = 往下看。可直接當 task1 的 --tilt
-    高度   鏡頭到地面平面的距離（公尺）。可直接當 task1 的 --phy-height
+    高度   鏡頭到地面平面的距離（公尺）。可直接當 task1 的 --phy-height（h 切換顯示）
+一邊調相機一邊看數字，不用重開。
+
+操作
+----
+滑鼠拖曳   框選地面（隨時可以重框）
+SPACE      把目前數值（最近幾幀的中位數）印到終端機，附 task1 參數
+h          顯示 / 隱藏高度
+ESC / q    離開
 
 算法參考 tpmrt 的 task1_clearance/ground.py：SVD 擬合平面，反覆剔除離群點再重擬。
 角度直接在相機原始座標裡算（光軸與地面法向的夾角），所以相機怎麼轉著架都不影響。
 
 用法
 ----
-python estimate_pitch.py                      # 開視窗框選地面，連抓 10 幀取中位數
-python estimate_pitch.py -n 30                # 抓 30 幀
-python estimate_pitch.py --roi 400,500,900,700  # 不開框選視窗，直接給 x0,y0,x1,y1
+python estimate_pitch.py
+python estimate_pitch.py --roi 400,500,900,700   # 開場就用這塊當地面（x0,y0,x1,y1）
 
 解析度跟其他 task 一樣，吃 realsense_source.py 的設定。
 """
@@ -22,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import statistics
+from collections import deque
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
@@ -32,9 +40,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 TOL_M = 0.03          # 離群門檻：離平面超過 3 cm 的點不算地面（容得下地面起伏，排得掉箱子）
 ITERS = 4             # 「擬合 → 剔除離群 → 重擬」的輪數
-MAX_POINTS = 60000    # 點太多就隨機抽樣，控制耗時
+MAX_POINTS = 20000    # 點太多就隨機抽樣，讓每幀都算得完
 MIN_POINTS = 500      # 少於這個數就不擬合
 RESIDUAL_WARN_M = 0.015
+SMOOTH_FRAMES = 15    # 顯示的「中位數」取最近幾幀
 
 
 def fit_plane(pts: np.ndarray, seed: int = 0) -> Optional[Tuple[np.ndarray, np.ndarray, float, int]]:
@@ -78,67 +87,116 @@ def pose_from_plane(n: np.ndarray, cen: np.ndarray) -> dict:
     }
 
 
-def select_roi(img: np.ndarray) -> Tuple[int, int, int, int]:
+class RoiPicker:
+    """滑鼠拖曳框選。拖曳中的框存在 dragging，放開後才換掉 roi。"""
+
+    def __init__(self, roi=None):
+        self.roi, self.start, self.dragging = roi, None, None
+
+    def __call__(self, event, x, y, flags, param):
+        import cv2
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.start, self.dragging = (x, y), None
+        elif event == cv2.EVENT_MOUSEMOVE and self.start:
+            self.dragging = (*self.start, x, y)
+        elif event == cv2.EVENT_LBUTTONUP and self.start:
+            x0, y0 = self.start
+            box = (min(x0, x), min(y0, y), max(x0, x), max(y0, y))
+            if box[2] - box[0] > 10 and box[3] - box[1] > 10:
+                self.roi = box
+            self.start = self.dragging = None
+
+
+def draw_panel(view, lines) -> None:
+    """左上角半透明底，逐行寫字。lines = [(文字, BGR 顏色)]。"""
     import cv2
-    win = "框選一塊地面，ENTER 確認（c 取消）"
-    x, y, w, h = cv2.selectROI(win, img, showCrosshair=False)
-    cv2.destroyWindow(win)
-    if w == 0 or h == 0:
-        raise SystemExit("沒有框選，結束。")
-    return x, y, x + w, y + h
+    h = 18 + 40 * len(lines)
+    overlay = view.copy()
+    cv2.rectangle(overlay, (0, 0), (760, h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, view, 0.45, 0, dst=view)
+    for i, (text, color) in enumerate(lines):
+        cv2.putText(view, text, (12, 42 + 40 * i), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="用地面深度估相機 pitch 與離地高度")
-    ap.add_argument("-n", type=int, default=10, help="抓幾幀取中位數（預設 10）")
+    import cv2
+
+    ap = argparse.ArgumentParser(description="即時顯示相機 pitch 與離地高度")
     ap.add_argument("--roi", default=None,
                     type=lambda s: tuple(int(v) for v in s.split(",")),
-                    help="地面區域 x0,y0,x1,y1（像素）；不給就開視窗框選")
+                    help="開場就用的地面區域 x0,y0,x1,y1（像素）；之後仍可用滑鼠重框")
     args = ap.parse_args()
 
     from realsense_source import RealSenseSource
 
+    win = "estimate_pitch — drag: ground ROI  SPACE: print  h: height  ESC: quit"
+    picker = RoiPicker(args.roi)
+    history = deque(maxlen=SMOOTH_FRAMES)
+    show_height, last_roi = True, None
+    WHITE, GREEN, YELLOW, RED = (255, 255, 255), (0, 255, 0), (0, 255, 255), (0, 0, 255)
+
+    print("用滑鼠在畫面上框一塊地面。SPACE 印出數值，h 切換高度，ESC 離開。")
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(win, picker)
     with RealSenseSource() as cam:
-        color_img, _ = cam.get_frame()
-        x0, y0, x1, y1 = args.roi or select_roi(color_img)
-        print(f"地面區域 x {x0}~{x1}, y {y0}~{y1}，抓 {args.n} 幀...")
+        frame_i = 0
+        while True:
+            color_img, pc = cam.get_frame()
+            view = color_img.copy()
+            lines, pose = [], None
 
-        results = []
-        for i in range(args.n):
-            _, pc = cam.get_frame()
-            # get_frame 套過 R_fix（box_measure 的座標修正），轉回相機原始座標
-            raw = pc[y0:y1, x0:x1].reshape(-1, 3) @ cam.R_fix
-            fit = fit_plane(raw, seed=i)
-            if fit is None:
-                print(f"  [{i + 1}] 有效點太少，略過")
-                continue
-            n, cen, resid, inliers = fit
-            pose = pose_from_plane(n, cen)
-            pose.update(resid=resid, inliers=inliers)
-            results.append(pose)
-            print(f"  [{i + 1}] pitch {pose['pitch']:+6.2f}°  高度 {pose['height']:.3f} m  "
-                  f"殘差 {resid * 1000:4.1f} mm  內點 {inliers}")
+            if picker.roi != last_roi:          # 換了區域，舊的歷史不能混進來
+                history.clear()
+                last_roi = picker.roi
 
-    if not results:
-        print("❌ 擬合不出地面——框選區域要是一大片平坦地面，且在深度量得到的範圍內。")
-        return 1
+            if picker.roi is None:
+                lines.append(("Drag a box on the GROUND", YELLOW))
+            else:
+                x0, y0, x1, y1 = picker.roi
+                # get_frame 套過 R_fix（box_measure 的座標修正），轉回相機原始座標
+                raw = pc[y0:y1, x0:x1].reshape(-1, 3) @ cam.R_fix
+                fit = fit_plane(raw, seed=frame_i)
+                cv2.rectangle(view, (x0, y0), (x1, y1), GREEN, 2)
+                if fit is None:
+                    lines.append(("not enough depth in box", RED))
+                else:
+                    n, cen, resid, inliers = fit
+                    pose = pose_from_plane(n, cen)
+                    pose["resid"] = resid
+                    history.append(pose)
+                    med = {k: statistics.median(h[k] for h in history) for k in pose}
+                    bad = resid > RESIDUAL_WARN_M
+                    lines.append((f"pitch  {pose['pitch']:+6.2f} deg   (median {med['pitch']:+6.2f})",
+                                  RED if bad else GREEN))
+                    if show_height:
+                        lines.append((f"height {pose['height']:.3f} m    (median {med['height']:.3f})",
+                                      RED if bad else WHITE))
+                    lines.append((f"resid  {resid * 1000:4.1f} mm" + ("  NOT FLAT? re-draw" if bad else ""),
+                                  RED if bad else WHITE))
 
-    med = {k: statistics.median(r[k] for r in results) for k in results[0]}
-    spread = max(r["pitch"] for r in results) - min(r["pitch"] for r in results)
-    print("\n" + "-" * 64)
-    print(f"  pitch   {med['pitch']:+.2f}°   （負 = 往下看；{len(results)} 幀中位數，全距 {spread:.2f}°）")
-    print(f"  高度    {med['height']:.3f} m")
-    print(f"  殘差    {med['resid'] * 1000:.1f} mm")
-    print(f"  畫面右方相對水平 {med['img_right']:+.1f}°、畫面上方相對水平 {med['img_up']:+.1f}°")
-    print("  （相機轉 90° 架時，其中一個應該接近 0°；不接近 0° 代表相機還有側傾）")
-    print("-" * 64)
-    print(f"  task1 試用：--tilt {med['pitch']:.1f} --phy-height {med['height']:.2f}")
-    print("  （task1 現在的預設是 tilt -35.0、高度 2.25，見 pallet_stack.py）")
-    if med["resid"] > RESIDUAL_WARN_M:
-        print(f"  ⚠ 殘差超過 {RESIDUAL_WARN_M * 1000:.0f} mm，框到的可能不是平坦地面，請重框")
-    if spread > 1.0:
-        print("  ⚠ pitch 全距超過 1°，結果不穩，建議重跑")
-    print("  ⚠ 記得用捲尺量一次鏡頭離地高度，差超過 2 cm 就是擬合到別的平面了")
+            if picker.dragging:
+                x0, y0, x1, y1 = picker.dragging
+                cv2.rectangle(view, (x0, y0), (x1, y1), YELLOW, 1)
+            draw_panel(view, lines)
+            cv2.imshow(win, view)
+            frame_i += 1
+
+            key = cv2.waitKey(1) & 0xFF
+            if key in (27, ord("q")):
+                break
+            if key == ord("h"):
+                show_height = not show_height
+            if key == ord(" ") and history:
+                med = {k: statistics.median(h[k] for h in history) for k in history[0]}
+                spread = max(h["pitch"] for h in history) - min(h["pitch"] for h in history)
+                print("-" * 64)
+                print(f"  pitch   {med['pitch']:+.2f}°   （最近 {len(history)} 幀中位數，全距 {spread:.2f}°）")
+                print(f"  高度    {med['height']:.3f} m   殘差 {med['resid'] * 1000:.1f} mm")
+                print(f"  畫面右方相對水平 {med['img_right']:+.1f}°、畫面上方相對水平 {med['img_up']:+.1f}°"
+                      "（相機轉 90° 架時其中一個應接近 0°，否則有側傾）")
+                print(f"  task1 試用：--tilt {med['pitch']:.1f} --phy-height {med['height']:.2f}"
+                      "   （目前預設 tilt -35.0、高度 2.25）")
+    cv2.destroyAllWindows()
     return 0
 
 
