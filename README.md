@@ -16,6 +16,8 @@
 > 來源：從一個貨物堆疊的視覺專案拆出來。原始碼的行號引用（`src/…`、`vision_engine.py:…`）
 > 指的是那個專案，不在這個 repo 裡。
 
+**只想在現場開程式、看結果 → 看 [USAGE.md](USAGE.md)（操作手冊）。** 這份 README 講的是演算法與移植。
+
 
 ---
 
@@ -35,18 +37,27 @@ pip install -r requirements-hardware.txt   # 再加上相機與模型（會拉�
 
 ## 30 秒上手
 
+下面與後文的 `$PY` 是「裝好套件的那個 Python」。gt-1 這台用：
+
+```bash
+PY="env -u PYTHONPATH ../fgo/.fgovenv/bin/python"
+```
+
 ```bash
 # 跑測試（不需要相機、不需要模型，1.5 秒）
-pytest tests -q
+$PY -m pytest tests -q
 
 # 接上相機，開即時預覽
-python run_live.py --task 3 --preview --rot-k 0 --label L554001   # 紙箱尺寸（每次連抓 5 幀取中位數）
-python run_live.py --task 2 --preview --position 1,1              # 擺放檢查
-python run_live.py --task 1 --preview --station g4_1              # 堆疊判定
+$PY run_live.py --task 3 --preview --rot-k 0 --label L554001   # 紙箱尺寸（每次連抓 5 幀取中位數）
+$PY run_live.py --task 2 --preview --position 1,1              # 擺放檢查
+$PY run_live.py --task 1 --preview --station g4_1              # 堆疊判定
+$PY run_live.py --task 4 --preview                             # 讀條碼
 
 # 拿存好的資料離線重跑，不需要相機
-python run_live.py --replay fixtures/ --rot-k 0
+$PY run_live.py --replay fixtures/ --rot-k 0
 ```
+
+每個功能的完整操作（按鍵、怎麼看畫面、常見狀況）見 [USAGE.md](USAGE.md)。
 
 沒裝 `pyrealsense2` 也能跑測試——碰到取幀端的那幾個會自動跳過，三個量測單元的測試不受影響。
 
@@ -127,7 +138,9 @@ $PY run_live.py --task 2 --preview --position 1,1 --cardboard L554001
 $PY run_live.py --task 1 --preview --station g4_1 --cardboard L554001
 ```
 
-工作站：`g4_1` / `g4_2` / `g8_1` / `p_1`。`--block-type pallet|ground` 切棧板或地面。
+工作站：`g4_1` / `g4_2` / `g8_1` / `p_1`。模式依工作站自動決定：g 開頭是地面暫存區（ground，
+依箱子大小切格，g8_1 = 8 格），p 開頭是棧板（pallet，2×2 四角）；要強制指定用 `--block-type`。
+想看格子與取樣區畫在畫面上，用 `task1_place_view.py`（見 [USAGE.md](USAGE.md) 第 2 節）。
 
 右側是高度圖，格內數字是層數，綠框是目前會擺放的位置。**堆疊判定不需要 AI 模型**
 （只有優先度評分需要偵測框），所以每幀就能算（0.058 s / 17 fps），`SPACE` 才載模型跑完整流程。
@@ -143,6 +156,9 @@ $PY run_live.py --task 4 -n 3               # 不開視窗，連讀 3 次
 $PY barcode_read.py photo.jpg --show        # 讀照片，不需要相機
 $PY barcode_read.py --webcam 0              # 用 USB webcam
 ```
+
+**先把 `realsense_source.py` 的 `DEFAULT_COLOR_WIDTH/HEIGHT` 改成 `1920/1080`**（只有 D435 有），
+預設的 720p 讀不到細條碼；測完改回來，否則 task1~3 也會用 1080p。
 
 解碼器只用 **pyzbar**（Code128 / Code39 / EAN / UPC / QR 都認得），沒裝會直接報錯。
 不用 OpenCV 內建的解碼器：實拍時它會把 Code128 誤讀成隨機的 UPC 數字。

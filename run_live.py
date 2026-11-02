@@ -894,7 +894,7 @@ def main() -> int:
                     help="task1 的 SVR 評分模型路徑，不給就跳過評分（回傳 1.0）")
     ap.add_argument("--position", default="1,1",
                     help="task2 的 position_2d，格式 row,col；col=1 為左站，其他為右站")
-    ap.add_argument("--cardboard", default="L554001", help="task2 的箱型")
+    ap.add_argument("--cardboard", default="L554001", help="箱型（task1~3 共用，預設 L554001）")
     ap.add_argument("--block-type", dest="block_type", default=None,
                     choices=("pallet", "ground"),
                     help="棧板上還是地面。task1 不給就依工作站決定（g 開頭 ground、p 開頭 pallet）；"
@@ -902,9 +902,10 @@ def main() -> int:
     ap.add_argument("--retries", type=int, default=4,
                     help="task2 重試次數（每次重新取幀），對齊原本 vision_engine 的 4 次")
     ap.add_argument("--tilt", type=float, default=None,
-                    help="覆寫相機俯仰角（度）。不給就用 realsense_source 的現場值 -72.0")
+                    help="覆寫相機俯仰角（度，負 = 往下）。不給就用預設：task1 -35.0（pallet_stack）、"
+                         "task2 -72.0（realsense_source）")
     ap.add_argument("--phy-height", dest="phy_height", type=float, default=None,
-                    help="覆寫相機物理高度（公尺）。不給就用現場值 2.2")
+                    help="覆寫相機離地高度（公尺）。不給就用預設：task1 2.25、task2 2.2")
     ap.add_argument("--no-flip", action="store_true",
                     help="關掉左右鏡像（預設 flip=True，與現場一致）")
     ap.add_argument("--sweep", action="store_true",
