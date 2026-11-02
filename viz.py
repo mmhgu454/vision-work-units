@@ -177,19 +177,24 @@ def draw_task2_aim(color_img, pc_calib, ref, bound, *, min_ref_points=50, extra=
 
 # ---------------------------------------------------------------- task1 高度圖
 
-def draw_hmap(hmap, block=None, place_position=None, *, size=420, layers=3):
+def draw_hmap(hmap, block=None, place_position=None, *, size=420, layers=3, vrange=None):
     """
     把高度圖畫成彩色圖。-inf（沒有點）畫成深灰。
 
     block 給了就在對應的區域上疊層數字；place_position 那格加綠框。
+    vrange=(lo, hi) 固定顏色範圍（公尺），超出的截到兩端；不給就用這張圖自己的
+    最小～最大值——那樣每幀顏色都會跳，平地的幾公分雜訊也會被拉成整條色階。
     """
     valid = np.isfinite(hmap)
     vis = np.zeros((*hmap.shape, 3), dtype=np.uint8)
     if valid.any():
-        lo, hi = float(hmap[valid].min()), float(hmap[valid].max())
+        if vrange is None:
+            lo, hi = float(hmap[valid].min()), float(hmap[valid].max())
+        else:
+            lo, hi = vrange
         norm = np.zeros_like(hmap, dtype=np.float32)
         if hi - lo > 1e-9:
-            norm[valid] = (hmap[valid] - lo) / (hi - lo)
+            norm[valid] = np.clip((hmap[valid] - lo) / (hi - lo), 0.0, 1.0)
         colored = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
         vis[valid] = colored[valid]
     vis[~valid] = (40, 40, 40)
@@ -212,14 +217,15 @@ def draw_hmap(hmap, block=None, place_position=None, *, size=420, layers=3):
             cv2.rectangle(vis, (int(c * cw) + 2, int(r * ch) + 2),
                           (int((c + 1) * cw) - 2, int((r + 1) * ch) - 2), (0, 255, 0), 3)
 
-    _put(vis, "height map", (10, 24), (255, 255, 255), 0.6, 1)
+    label = "height map" if vrange is None else f"height map  {vrange[0]:.2f}~{vrange[1]:.2f} m"
+    _put(vis, label, (10, 24), (255, 255, 255), 0.6, 1)
     return vis
 
 
-def draw_task1_aim(color_img, hmap, block, place_position, *, extra=()):
-    """task1 的即時對準疊圖：左邊原圖、右邊高度圖。"""
+def draw_task1_aim(color_img, hmap, block, place_position, *, extra=(), vrange=None):
+    """task1 的即時對準疊圖：左邊原圖、右邊高度圖。vrange 見 draw_hmap。"""
     h, w = color_img.shape[:2]
-    panel = draw_hmap(hmap, block, place_position, size=h)
+    panel = draw_hmap(hmap, block, place_position, size=h, vrange=vrange)
 
     img = color_img.copy()
     k = max(0.35, min(1.0, w / 1280.0))

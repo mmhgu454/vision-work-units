@@ -349,17 +349,28 @@ def save_fixture_task1(color_img, pc_np, result, args):
     return path
 
 
-def export_task1_pngs(color_img, result, out_dir: Path, stem: str) -> None:
+def _task1_vrange(station: str, cardboard: str):
+    """
+    高度圖的固定顏色範圍：工作區基準高度 ～ 基準 + 疊滿的高度。
+    沿用 pallet_stack 判層數用的同一組基準與箱高，顏色與層數對得上。
+    """
+    import pallet_stack as psm
+    base = psm.DEFAULT_BLOCK_CATALOG[station].height
+    box_h = psm.DEFAULT_BOX_DIMENSIONS[cardboard][2]
+    return base, base + psm.MAX_LAYERS * box_h
+
+
+def export_task1_pngs(color_img, result, out_dir: Path, stem: str, vrange=None) -> None:
     import cv2
     import viz
     out_dir.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_dir / f"{stem}_1_raw.png"), color_img)
     if result.hmap is not None:
         cv2.imwrite(str(out_dir / f"{stem}_2_hmap.png"),
-                    viz.draw_hmap(result.hmap, result.block, result.place_position))
+                    viz.draw_hmap(result.hmap, result.block, result.place_position, vrange=vrange))
         cv2.imwrite(str(out_dir / f"{stem}_3_combined.png"),
                     viz.draw_task1_aim(color_img, result.hmap, result.block,
-                                       result.place_position))
+                                       result.place_position, vrange=vrange))
     print(f"  🖼  匯出 {out_dir}/{stem}_[1_raw|2_hmap|3_combined].png")
 
 
@@ -406,7 +417,8 @@ def run_task1(args, cam) -> int:
             path = save_fixture_task1(color_img, pc_np, result, args)
             if args.export is not None:
                 out_dir = Path(args.export) if args.export != "-" else FIXTURE_DIR / "png"
-                export_task1_pngs(color_img, result, out_dir, path.stem)
+                export_task1_pngs(color_img, result, out_dir, path.stem,
+                                  vrange=_task1_vrange(args.station, args.cardboard))
     return rc
 
 
@@ -420,6 +432,7 @@ def run_preview_task1(args, cam) -> int:
     import viz
 
     calibrate = _task1_calibrator(args)
+    vrange = _task1_vrange(args.station, args.cardboard)
     detect = detect_people = None
     saved = 0
 
@@ -436,7 +449,7 @@ def run_preview_task1(args, cam) -> int:
                        else psm.build_tape_block)
             (_, block), place, hmap = builder(pc_np, args.cardboard, args.station, calibrate)
             view = viz.draw_task1_aim(
-                color_img, hmap, block, place,
+                color_img, hmap, block, place, vrange=vrange,
                 extra=(f"tilt {calibrate.params[0]} / height {calibrate.params[1]}",
                        f"saved {saved}"))
             cv2.imshow(win, viz.fit_to_screen(view))
@@ -459,7 +472,7 @@ def run_preview_task1(args, cam) -> int:
             describe_stack(result, time.time() - t0)
 
             shot = viz.draw_task1_aim(color_img, result.hmap, result.block,
-                                      result.place_position,
+                                      result.place_position, vrange=vrange,
                                       extra=(f"score {result.prior_score:.3f}",))
             viz._put(shot, "s = 存檔    其他鍵 = 丟棄", (12, shot.shape[0] - 20),
                      (0, 255, 255), 0.8)
@@ -471,7 +484,8 @@ def run_preview_task1(args, cam) -> int:
                 saved += 1
                 if args.export is not None:
                     out_dir = Path(args.export) if args.export != "-" else FIXTURE_DIR / "png"
-                    export_task1_pngs(color_img, result, out_dir, path.stem)
+                    export_task1_pngs(color_img, result, out_dir, path.stem,
+                                      vrange=_task1_vrange(args.station, args.cardboard))
             else:
                 print("  已丟棄。")
             if k2 in (27, ord('q')):
@@ -512,7 +526,8 @@ def _replay_task1(d, path: Path, args, out_dir: Path) -> int:
         now = result.place_position or (-1, -1, -1)
         print(f"  對照存檔當下 {was}: " + ("✅ 一致" if was == tuple(now) else "❌ 不一致"))
     if args.export is not None:
-        export_task1_pngs(d["color_img"], result, out_dir, path.stem)
+        export_task1_pngs(d["color_img"], result, out_dir, path.stem,
+                          vrange=_task1_vrange(a.station, a.cardboard))
     return 0 if result.ok else 1
 
 
